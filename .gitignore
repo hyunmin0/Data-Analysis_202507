@@ -1,0 +1,5 @@
+# CSV 파일 무시
+*.csv
+
+# Excel 파일 무시
+*.xlsx
