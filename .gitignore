@@ -3,3 +3,8 @@
 
 # Excel 파일 무시
 *.xlsx
+
+*.json
+*.txt
+*.parquet
+*.png
