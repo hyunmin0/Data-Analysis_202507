@@ -1,0 +1,49 @@
+{
+  "customer_summary": {
+    "total_customers": 200,
+    "contract_types": {
+      "226 일반용(을) 고압A": 50,
+      "322 산업용(갑)‖고압A": 41,
+      "311 산업용(갑) 저압": 39,
+      "222 일반용(갑)‖고압A": 37,
+      "726 산업용(을) 고압A": 33
+    },
+    "usage_types": {
+      "02 상업용": 105,
+      "09 광공업용": 95
+    }
+  },
+  "lp_data_summary": {
+    "total_records": 57600,
+    "total_customers": 10,
+    "date_range": {
+      "start": "2024-03-01 00:00:00",
+      "end": "2024-03-30 23:45:00"
+    },
+    "avg_power": 53.65882291666668
+  },
+  "processed_lp_data": {
+    "total_records": 57600,
+    "total_customers": 10,
+    "date_range": {
+      "start": "2024-03-01 00:00:00",
+      "end": "2024-03-30 23:45:00"
+    },
+    "file_info": {
+      "csv_file": "processed_lp_data.csv",
+      "csv_size_gb": 0.003337312489748001,
+      "parquet_file": "processed_lp_data.parquet",
+      "parquet_size_gb": 0.00033732224255800247,
+      "parquet_available": true,
+      "encoding": "utf-8-sig"
+    },
+    "processed_timestamp": "2025-07-09T23:09:19.679137"
+  },
+  "metadata": {
+    "timestamp": "2025-07-09T23:09:19.679137",
+    "analysis_stage": "step1_preprocessing_optimized",
+    "version": "2.0",
+    "total_customers": 200,
+    "total_lp_records": 57600
+  }
+}
