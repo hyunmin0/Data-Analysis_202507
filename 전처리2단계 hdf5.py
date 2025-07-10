@@ -817,106 +817,7 @@ class KEPCOTimeSeriesAnalyzer:
         except Exception as e:
             print(f"   ❌ 시각화 생성 실패: {e}")
             return False
-
-    def generate_comprehensive_report(self):
-        """종합 분석 리포트 생성"""
-        print("\n📋 7단계: 종합 분석 리포트 생성...")
         
-        report_file = os.path.join(self.output_dir, 'comprehensive_analysis_report.txt')
-        
-        try:
-            with open(report_file, 'w', encoding='utf-8') as f:
-                f.write("한국전력공사 전력 사용패턴 변동계수 개발 프로젝트\n")
-                f.write("시계열 패턴 분석 및 변동성 지표 개발 결과 리포트\n")
-                f.write("=" * 80 + "\n\n")
-                
-                # 1. 분석 개요
-                f.write("1. 분석 개요\n")
-                f.write("-" * 40 + "\n")
-                f.write(f"분석 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                
-                customer_summary = self.analysis_results.get('customer_summary', {})
-                lp_summary = self.analysis_results.get('lp_data_summary', {})
-                
-                total_customers = customer_summary.get('total_customers', 0)
-                total_records = lp_summary.get('total_records', 0)
-                analyzed_customers = lp_summary.get('total_customers', 0)  # LP데이터의 고객 수
-                
-                f.write(f"고객 수: {total_customers:,}명\n" if total_customers else "고객 수: N/A명\n")
-                f.write(f"LP 레코드: {total_records:,}개\n" if total_records else "LP 레코드: N/A개\n")
-                f.write(f"분석 대상 고객: {analyzed_customers}명\n")
-                
-                date_range = lp_summary.get('date_range', {})
-                
-                if date_range:
-                    f.write(f"데이터 기간: {date_range.get('start', 'N/A')} ~ {date_range.get('end', 'N/A')}\n")
-                f.write("\n")
-                
-                # 2. 시계열 패턴 분석 결과
-                f.write("2. 시계열 패턴 분석 결과\n")
-                f.write("-" * 40 + "\n")
-                
-                temporal = self.analysis_results.get('temporal_patterns', {})
-                if temporal:
-                    f.write(f"피크 시간대: {temporal.get('peak_hours', [])}\n")
-                    f.write(f"비피크 시간대: {temporal.get('off_peak_hours', [])}\n")
-                    f.write(f"주말/평일 사용량 비율: {temporal.get('weekend_ratio', 0):.3f}\n")
-                    
-                    # 계절별 패턴
-                    seasonal = temporal.get('seasonal_patterns', {})
-                    if seasonal:
-                        f.write("\n계절별 평균 사용량:\n")
-                        for season in ['봄', '여름', '가을', '겨울']:
-                            if season in seasonal and 'mean' in seasonal[season]:
-                                f.write(f"  {season}: {seasonal[season]['mean']:.2f}kW\n")
-                f.write("\n")
-                
-                # 3. 변동성 지표 분석 결과
-                f.write("3. 변동성 지표 분석 결과\n")
-                f.write("-" * 40 + "\n")
-                
-                volatility = self.analysis_results.get('volatility_analysis', {})
-                if volatility:
-                    summary_stats = volatility.get('summary_stats', {})
-                    cv_stats = summary_stats.get('cv_basic', {})
-                    
-                    if cv_stats:
-                        f.write("기본 변동계수(CV) 통계:\n")
-                        f.write(f"  평균: {cv_stats.get('mean', 0):.4f}\n")
-                        f.write(f"  표준편차: {cv_stats.get('std', 0):.4f}\n")
-                        f.write(f"  최솟값: {cv_stats.get('min', 0):.4f}\n")
-                        f.write(f"  최댓값: {cv_stats.get('max', 0):.4f}\n")
-                        
-                    quartiles = volatility.get('quartiles', {})
-                    if quartiles:
-                        f.write("\n변동계수 사분위수:\n")
-                        f.write(f"  Q1 (25%): {quartiles.get(0.25, 0):.4f}\n")
-                        f.write(f"  Q2 (50%): {quartiles.get(0.5, 0):.4f}\n")
-                        f.write(f"  Q3 (75%): {quartiles.get(0.75, 0):.4f}\n")
-                f.write("\n")
-                
-                # 4. 이상 패턴 탐지 결과
-                f.write("4. 이상 패턴 탐지 결과\n")
-                f.write("-" * 40 + "\n")
-                
-                anomaly = self.analysis_results.get('anomaly_analysis', {})
-                if anomaly:
-                    total_anomaly = anomaly.get('total_anomaly_customers', 0)
-                    anomaly_rate = anomaly.get('anomaly_rate', 0) * 100
-                    f.write(f"이상 패턴 고객: {total_anomaly}명 ({anomaly_rate:.1f}%)\n")
-                    
-                    anomaly_types = anomaly.get('anomaly_types', {})
-                    f.write("\n이상 패턴 유형별 분포:\n")
-                    for pattern_type, count in anomaly_types.items():
-                        f.write(f"  {pattern_type}: {count}명\n")
-                f.write("\n")
-                
-            print(f"   💾 종합 리포트 저장: {report_file}")
-            return True
-            
-        except Exception as e:
-            print(f"   ❌ 리포트 생성 실패: {e}")
-            return False
 
     def save_analysis_results(self):
         """분석 결과를 JSON 파일로 저장"""
@@ -938,7 +839,7 @@ class KEPCOTimeSeriesAnalyzer:
                     results_for_json[key] = value
             
             # JSON 파일로 저장
-            output_file = os.path.join(self.output_dir, 'analysis_results.json')
+            output_file = os.path.join(self.output_dir, 'analysis_results2.json')
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(results_for_json, f, ensure_ascii=False, indent=2, default=str)
             
@@ -986,10 +887,8 @@ class KEPCOTimeSeriesAnalyzer:
             # 6. 시각화 생성
             self.create_summary_visualizations()
             
-            # 7. 종합 리포트 생성
-            self.generate_comprehensive_report()
             
-            # 8. 결과 저장
+            # 7. 결과 저장
             self.save_analysis_results()
             
             end_time = datetime.now()
@@ -1015,4 +914,4 @@ if __name__ == "__main__":
     success = analyzer.run_complete_analysis()
     
     if success:
-        print("ㄹㅇㄹㅇ 성공")
+        print("성공")
