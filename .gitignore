@@ -8,3 +8,6 @@
 *.txt
 *.parquet
 *.png
+*.ipynb_checkpoints
+*.pkl
+*.parquet
