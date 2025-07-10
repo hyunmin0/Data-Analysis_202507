@@ -324,7 +324,7 @@ class KEPCODataAnalyzer:
             print(f"   📊 저장 대상: {len(self.lp_data):,}개 레코드")
             print(f"      📦 HDF5 저장 중...")
             try:
-                self.lp_data.to_hdf(processed_hdf5, key='df', mode='w', complib='blosc', complevel=9)
+                self.lp_data.to_hdf(processed_hdf5, key='df', mode='w', format='table')
                 hdf5_size_gb = os.path.getsize(processed_hdf5) / 1024**3
                 hdf5_success = True
             except Exception as hdf5_error:
@@ -352,7 +352,7 @@ class KEPCODataAnalyzer:
                     'hdf5_file': 'processed_lp_data.hdf5' if hdf5_success else None,
                     'hdf5_size_gb': hdf5_size_gb if hdf5_success else None,
                     'hdf5_available': hdf5_success,
-                    'compression': 'blosc' if hdf5_success else None,
+                    'compression': 'table_format' if hdf5_success else None,
                     'encoding': 'utf-8-sig'
                 },
                 'processed_timestamp': datetime.now().isoformat()

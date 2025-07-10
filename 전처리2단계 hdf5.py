@@ -98,7 +98,7 @@ class KEPCOTimeSeriesAnalyzer:
             if os.path.exists(processed_hdf5):
                 print("HDF5 파일 로딩")
                 try:
-                    self.lp_data = pd.read_hdf(processed_hdf5)
+                    self.lp_data = pd.read_hdf(processed_hdf5, key='df')
                     loading_method = "HDF5"
                     print(" 로딩 성공")
                 except Exception as e:
