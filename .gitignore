@@ -1,8 +1,8 @@
-# CSV 파일 무시
-*.csv
+# # CSV 파일 무시
+# *.csv
 
-# Excel 파일 무시
-*.xlsx
+# # Excel 파일 무시
+# *.xlsx
 
 *.json
 *.txt
