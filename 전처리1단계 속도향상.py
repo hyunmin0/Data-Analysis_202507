@@ -333,11 +333,9 @@ class KEPCODataAnalyzer:
                 hdf5_success = False
 
             print(f"   ✅ 전처리된 데이터 저장 완료!")
-            #print(f"      📄 CSV: {processed_csv} ({csv_size_gb:.2f}GB)")
 
             if hdf5_success:
                 print(f"      📦 HDF5: {processed_hdf5} ({hdf5_size_gb:.2f}GB)")
-                #print(f"      🚀 크기 절약: {((csv_size_gb - hdf5_size_gb) / csv_size_gb * 100):.1f}%")
                 print(f"      ⚡ 로딩 속도 향상: 약 2-3배 빨라짐!")
 
             # 메타 정보 저장 (⭐ Parquet 정보 추가)
@@ -363,8 +361,6 @@ class KEPCODataAnalyzer:
 
             if hdf5_success:
                 print(f"   🚀 2-3단계에서 30분 → 3-5분으로 시간 단축 예상!")
-            else:
-                print(f"   📄 CSV로 저장 완료 (30분 → 8분 시간 단축)")
 
         except Exception as save_error:
             print(f"   ❌ 전처리된 데이터 저장 실패: {save_error}")
@@ -425,7 +421,6 @@ class KEPCODataAnalyzer:
         print(f"\n🎯 1단계 최적화 완료!")
         print(f"   📁 생성 파일:")
         print(f"      - analysis_results.json (2-3단계 연계용)")
-        print(f"      - processed_lp_data.csv (전처리된 LP 데이터)")
         if 'processed_lp_data' in self.analysis_results and self.analysis_results['processed_lp_data']['file_info']['hdf5_available']:
             print(f"      - processed_lp_data.hdf5 (고성능 전처리된 데이터)")
 

@@ -62,7 +62,7 @@ class KEPCOTimeSeriesAnalyzer:
             contract_dist = self.customer_data['계약종별'].value_counts()
             usage_dist = self.customer_data['사용용도'].value_counts()
             
-            print(f"\\n📊 고객 분포:")
+            print(f"\n📊 고객 분포:")
             print(f"   - 계약종별: {len(contract_dist)}개 유형")
             print(f"   - 사용용도: {len(usage_dist)}개 유형")
             
@@ -80,7 +80,7 @@ class KEPCOTimeSeriesAnalyzer:
 
     def load_preprocessed_data(self):
         """실제 LP 데이터 로딩 (대용량 처리)"""
-        print("\\n🔄 2단계: LP 데이터 로딩...")
+        print("\n🔄 2단계: LP 데이터 로딩...")
         
         try:
             analysis_results_path = './analysis_results/analysis_results.json'
@@ -147,7 +147,7 @@ class KEPCOTimeSeriesAnalyzer:
 
     def _validate_data_quality(self):
         """데이터 품질 검증"""
-        print("\\n🔍 데이터 품질 검증 중...")
+        print("\n🔍 데이터 품질 검증 중...")
         
         # 기본 통계
         numeric_columns = ['순방향 유효전력', '지상무효', '진상무효', '피상전력']
@@ -184,7 +184,7 @@ class KEPCOTimeSeriesAnalyzer:
                     print(f"      {customer}: 평균 {avg_interval:.1f}분 (표준편차: {std_interval:.1f})")
         
         # 분석 결과 저장
-        self.analysis_results['data_quality'] = {
+        self.analysis_results['lp_data_summary'] = {
             'total_records': len(self.lp_data),
             'customers': self.lp_data['대체고객번호'].nunique(),
             'null_counts': null_counts.to_dict(),
@@ -196,39 +196,46 @@ class KEPCOTimeSeriesAnalyzer:
         
         return True
 
+
+
     def analyze_temporal_patterns(self):
         """시계열 패턴 분석"""
-        print("\\n📈 3단계: 시계열 패턴 분석...")
-        
-        # 시간 관련 파생 변수 생성
+        print("\n📈 3단계: 시계열 패턴 분석...")
         print("   🕐 시간 파생 변수 생성 중...")
         
-        print(f" 사용 가능한 컬럼: {list(self.lp_data.columns)}")
-        
+        # datetime 컬럼 확인 및 변환
         if 'datetime' in self.lp_data.columns:
             datetime_col = 'datetime'
         elif 'LP 수신일자' in self.lp_data.columns:
             datetime_col = 'LP 수신일자'
-            if not pd.api.types.is_datetime64_any_dtype(self.lp_data[datetime_col]):
-                self.lp_data[datetime_col] = pd.to_datetime(self.lp_data[datetime_col])
         else:
-            print("날짜/시간 컬럼 찾을 수 없음")
+            print("❌ 날짜/시간 컬럼을 찾을 수 없습니다")
             return False
         
-        self.lp_data['날짜'] = self.lp_data['LP 수신일자'].dt.date
-        self.lp_data['시간'] = self.lp_data['LP 수신일자'].dt.hour
-        self.lp_data['요일'] = self.lp_data['LP 수신일자'].dt.weekday  # 0=월요일
-        self.lp_data['월'] = self.lp_data['LP 수신일자'].dt.month
-        self.lp_data['주'] = self.lp_data['LP 수신일자'].dt.isocalendar().week
-        self.lp_data['주말여부'] = self.lp_data['요일'].isin([5, 6])  # 토, 일
+        # datetime 타입 변환
+        if not pd.api.types.is_datetime64_any_dtype(self.lp_data[datetime_col]):
+            self.lp_data[datetime_col] = pd.to_datetime(self.lp_data[datetime_col], errors='coerce')
         
-        # 1. 시간대별 패턴 분석
+        # 파생 변수 생성
+        try:
+            self.lp_data['날짜'] = self.lp_data[datetime_col].dt.date
+            self.lp_data['시간'] = self.lp_data[datetime_col].dt.hour
+            self.lp_data['요일'] = self.lp_data[datetime_col].dt.weekday
+            self.lp_data['월'] = self.lp_data[datetime_col].dt.month
+            self.lp_data['주'] = self.lp_data[datetime_col].dt.isocalendar().week
+            self.lp_data['주말여부'] = self.lp_data['요일'].isin([5, 6])
+            
+            print("   ✅ 시간 파생 변수 생성 완료")
+        except Exception as e:
+            print(f"❌ 시간 파생 변수 생성 실패: {e}")
+            return False
+        
+        # 시간대별 패턴 분석
         print("   📊 시간대별 패턴 분석...")
         hourly_patterns = self.lp_data.groupby('시간')['순방향 유효전력'].agg([
             'mean', 'std', 'min', 'max', 'count'
         ]).round(2)
         
-        # 피크/비피크 시간대 식별
         avg_by_hour = hourly_patterns['mean']
         peak_threshold = avg_by_hour.quantile(0.75)
         off_peak_threshold = avg_by_hour.quantile(0.25)
@@ -236,31 +243,22 @@ class KEPCOTimeSeriesAnalyzer:
         peak_hours = avg_by_hour[avg_by_hour >= peak_threshold].index.tolist()
         off_peak_hours = avg_by_hour[avg_by_hour <= off_peak_threshold].index.tolist()
         
-        print(f"      피크 시간대: {peak_hours}")
-        print(f"      비피크 시간대: {off_peak_hours}")
-        
-        # 2. 요일별 패턴 분석
+        # 요일별 패턴 분석
         print("   📅 요일별 패턴 분석...")
         daily_patterns = self.lp_data.groupby('요일')['순방향 유효전력'].agg([
             'mean', 'std', 'count'
         ]).round(2)
         
-        # 평일 vs 주말 비교
         weekday_avg = self.lp_data[~self.lp_data['주말여부']]['순방향 유효전력'].mean()
         weekend_avg = self.lp_data[self.lp_data['주말여부']]['순방향 유효전력'].mean()
         weekend_ratio = weekend_avg / weekday_avg if weekday_avg > 0 else 0
         
-        print(f"      평일 평균: {weekday_avg:.2f}kW")
-        print(f"      주말 평균: {weekend_avg:.2f}kW")
-        print(f"      주말/평일 비율: {weekend_ratio:.3f}")
-        
-        # 3. 월별 계절성 패턴
+        # 월별 계절성 패턴
         print("   🗓️ 월별 계절성 분석...")
         monthly_patterns = self.lp_data.groupby('월')['순방향 유효전력'].agg([
             'mean', 'std', 'count'
         ]).round(2)
         
-        # 계절 구분 (한국 기준)
         season_map = {12: '겨울', 1: '겨울', 2: '겨울',
                      3: '봄', 4: '봄', 5: '봄',
                      6: '여름', 7: '여름', 8: '여름',
@@ -270,10 +268,6 @@ class KEPCOTimeSeriesAnalyzer:
         seasonal_patterns = self.lp_data.groupby('계절')['순방향 유효전력'].agg([
             'mean', 'std', 'count'
         ]).round(2)
-        
-        print(f"      계절별 평균 사용량:")
-        for season, values in seasonal_patterns.iterrows():
-            print(f"        {season}: {values['mean']:.2f}kW")
         
         # 분석 결과 저장
         self.analysis_results['temporal_patterns'] = {
@@ -290,7 +284,7 @@ class KEPCOTimeSeriesAnalyzer:
 
     def analyze_volatility_indicators(self):
         """변동성 지표 분석 (집계 중심)"""
-        print("\\n📊 4단계: 변동성 지표 분석...")
+        print("\n📊 4단계: 변동성 지표 분석...")
         
         customers = self.lp_data['대체고객번호'].unique()
         print(f"   🔄 {len(customers)}명 고객 변동성 분석 중...")
@@ -312,7 +306,7 @@ class KEPCOTimeSeriesAnalyzer:
         ])
         hourly_volatility['cv'] = hourly_volatility['std'] / hourly_volatility['mean']
         
-        print(f"\\n   ⏰ 시간대별 변동성 패턴:")
+        print(f"\n   ⏰ 시간대별 변동성 패턴:")
         high_volatility_hours = hourly_volatility.nlargest(3, 'cv').index.tolist()
         low_volatility_hours = hourly_volatility.nsmallest(3, 'cv').index.tolist()
         print(f"      고변동성 시간대: {high_volatility_hours}시 (CV: {hourly_volatility.loc[high_volatility_hours, 'cv'].mean():.4f})")
@@ -327,7 +321,7 @@ class KEPCOTimeSeriesAnalyzer:
         weekday_cv = daily_volatility.loc[0:4, 'cv'].mean()  # 월-금
         weekend_cv = daily_volatility.loc[5:6, 'cv'].mean()  # 토-일
         
-        print(f"\\n   📅 요일별 변동성 패턴:")
+        print(f"\n   📅 요일별 변동성 패턴:")
         print(f"      평일 평균 변동계수: {weekday_cv:.4f}")
         print(f"      주말 평균 변동계수: {weekend_cv:.4f}")
         print(f"      주말/평일 변동성 비율: {weekend_cv/weekday_cv:.3f}")
@@ -338,14 +332,14 @@ class KEPCOTimeSeriesAnalyzer:
         ])
         monthly_volatility['cv'] = monthly_volatility['std'] / monthly_volatility['mean']
         
-        print(f"\\n   🗓️ 월별 변동성 패턴:")
+        print(f"\n   🗓️ 월별 변동성 패턴:")
         high_var_months = monthly_volatility.nlargest(2, 'cv').index.tolist()
         low_var_months = monthly_volatility.nsmallest(2, 'cv').index.tolist()
         print(f"      고변동성 월: {high_var_months}월")
         print(f"      저변동성 월: {low_var_months}월")
         
         # 5. 고객별 변동성 분포 (요약 통계만)
-        print(f"\\n   👥 고객별 변동성 분포 분석...")
+        print(f"\n   👥 고객별 변동성 분포 분석...")
         
         # 청크 단위로 고객별 변동계수 계산 (메모리 효율성)
         chunk_size = 100
@@ -384,7 +378,7 @@ class KEPCOTimeSeriesAnalyzer:
         
         cv_counts = pd.cut(cv_array, bins=cv_bins, labels=cv_labels, include_lowest=True).value_counts()
         
-        print(f"\\n   🎯 변동성 등급별 고객 분포:")
+        print(f"\n   🎯 변동성 등급별 고객 분포:")
         for grade, count in cv_counts.items():
             percentage = count / len(customer_cvs) * 100
             print(f"      {grade}: {count}명 ({percentage:.1f}%)")
@@ -421,13 +415,13 @@ class KEPCOTimeSeriesAnalyzer:
         summary_df = pd.DataFrame(summary_data)
         output_file = os.path.join(self.output_dir, 'volatility_summary.csv')
         summary_df.to_csv(output_file, index=False, encoding='utf-8-sig')
-        print(f"\\n   💾 변동성 요약 저장: {output_file}")
+        print(f"\n   💾 변동성 요약 저장: {output_file}")
         
         return cv_array
 
     def detect_anomalies(self):
         """이상 패턴 탐지 (집계 중심)"""
-        print("\\n🚨 5단계: 이상 패턴 탐지...")
+        print("\n🚨 5단계: 이상 패턴 탐지...")
         
         customers = self.lp_data['대체고객번호'].unique()
         print(f"   🔍 {len(customers)}명 고객 이상 패턴 탐지 중...")
@@ -460,7 +454,7 @@ class KEPCOTimeSeriesAnalyzer:
         day_avg = day_data['순방향 유효전력'].mean()
         night_day_ratio = night_avg / day_avg if day_avg > 0 else 0
         
-        print(f"\\n   🌙 시간대별 사용 패턴:")
+        print(f"\n   🌙 시간대별 사용 패턴:")
         print(f"      야간 평균: {night_avg:.2f}kW")
         print(f"      주간 평균: {day_avg:.2f}kW")
         print(f"      야간/주간 비율: {night_day_ratio:.3f}")
@@ -469,7 +463,7 @@ class KEPCOTimeSeriesAnalyzer:
         zero_count = (overall_power == 0).sum()
         zero_rate = zero_count / len(overall_power) * 100
         
-        print(f"\\n   ⚫ 0값 패턴 분석:")
+        print(f"\n   ⚫ 0값 패턴 분석:")
         print(f"      0값 측정: {zero_count:,}개 ({zero_rate:.2f}%)")
         
         # 4. 급격한 변화 패턴 (전체 데이터 기준)
@@ -477,7 +471,7 @@ class KEPCOTimeSeriesAnalyzer:
         sudden_changes = power_changes[power_changes > 2.0]  # 200% 이상 변화
         sudden_change_rate = len(sudden_changes) / len(power_changes.dropna()) * 100
         
-        print(f"\\n   ⚡ 급격한 변화 패턴:")
+        print(f"\n   ⚡ 급격한 변화 패턴:")
         print(f"      급격한 변화: {len(sudden_changes):,}건 ({sudden_change_rate:.2f}%)")
         
         # 5. 고객별 이상 패턴 요약 통계 (개별 출력 없이)
@@ -532,7 +526,7 @@ class KEPCOTimeSeriesAnalyzer:
         total_anomaly_customers = max(anomaly_customers.values())  # 단순 근사
         anomaly_rate = total_anomaly_customers / processed_customers * 100 if processed_customers > 0 else 0
         
-        print(f"\\n   📊 이상 패턴 고객 요약 ({processed_customers}명 분석):")
+        print(f"\n   📊 이상 패턴 고객 요약 ({processed_customers}명 분석):")
         print(f"      야간 과다 사용: {anomaly_customers['high_night_usage']}명")
         print(f"      과도한 0값: {anomaly_customers['excessive_zeros']}명")
         print(f"      높은 변동성: {anomaly_customers['high_volatility']}명")
@@ -558,7 +552,7 @@ class KEPCOTimeSeriesAnalyzer:
 
     def create_summary_visualizations(self):
         """요약 시각화 생성 (집계 데이터 중심)"""
-        print("\\n📊 6단계: 분석 결과 시각화...")
+        print("\n📊 6단계: 분석 결과 시각화...")
         
         try:
             # 1. 시간대별/요일별 패턴 시각화
@@ -708,7 +702,7 @@ class KEPCOTimeSeriesAnalyzer:
 
     def create_summary_visualizations(self):
         """요약 시각화 생성"""
-        print("\\n📊 6단계: 분석 결과 시각화...")
+        print("\n📊 6단계: 분석 결과 시각화...")
         
         try:
             # 1. 시간대별 평균 전력 사용 패턴
@@ -826,56 +820,60 @@ class KEPCOTimeSeriesAnalyzer:
 
     def generate_comprehensive_report(self):
         """종합 분석 리포트 생성"""
-        print("\\n📋 7단계: 종합 분석 리포트 생성...")
+        print("\n📋 7단계: 종합 분석 리포트 생성...")
         
         report_file = os.path.join(self.output_dir, 'comprehensive_analysis_report.txt')
         
         try:
             with open(report_file, 'w', encoding='utf-8') as f:
-                f.write("한국전력공사 전력 사용패턴 변동계수 개발 프로젝트\\n")
-                f.write("시계열 패턴 분석 및 변동성 지표 개발 결과 리포트\\n")
-                f.write("=" * 80 + "\\n\\n")
+                f.write("한국전력공사 전력 사용패턴 변동계수 개발 프로젝트\n")
+                f.write("시계열 패턴 분석 및 변동성 지표 개발 결과 리포트\n")
+                f.write("=" * 80 + "\n\n")
                 
                 # 1. 분석 개요
-                f.write("1. 분석 개요\\n")
-                f.write("-" * 40 + "\\n")
-                f.write(f"분석 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\\n")
+                f.write("1. 분석 개요\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"분석 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 
-                total_customers = self.analysis_result.get('customer_summary', {}).get('total_customers',0)
-                total_records = self.analysis_result.get('data_quality', {}).get('total_records',0)
-                analyzed_customers = self.analysis_result.get('data_quality', {}).get('customers',0)
+                customer_summary = self.analysis_results.get('customer_summary', {})
+                lp_summary = self.analysis_results.get('lp_data_summary', {})
                 
-                f.write(f"고객 수: {self.analysis_results.get('customer_summary', {}).get('total_customers', 'N/A'):,}명\\n")
-                f.write(f"LP 레코드: {self.analysis_results.get('data_quality', {}).get('total_records', 'N/A'):,}개\\n")
-                f.write(f"분석 대상 고객: {self.analysis_results.get('data_quality', {}).get('customers', 'N/A')}명\\n")
+                total_customers = customer_summary.get('total_customers', 0)
+                total_records = lp_summary.get('total_records', 0)
+                analyzed_customers = lp_summary.get('total_customers', 0)  # LP데이터의 고객 수
                 
-                date_range = self.analysis_results.get('data_quality', {}).get('date_range', {})
+                f.write(f"고객 수: {total_customers:,}명\n" if total_customers else "고객 수: N/A명\n")
+                f.write(f"LP 레코드: {total_records:,}개\n" if total_records else "LP 레코드: N/A개\n")
+                f.write(f"분석 대상 고객: {analyzed_customers}명\n")
+                
+                date_range = lp_summary.get('date_range', {})
+                
                 if date_range:
-                    f.write(f"데이터 기간: {date_range.get('start', 'N/A')} ~ {date_range.get('end', 'N/A')}\\n")
-                f.write("\\n")
+                    f.write(f"데이터 기간: {date_range.get('start', 'N/A')} ~ {date_range.get('end', 'N/A')}\n")
+                f.write("\n")
                 
                 # 2. 시계열 패턴 분석 결과
-                f.write("2. 시계열 패턴 분석 결과\\n")
-                f.write("-" * 40 + "\\n")
+                f.write("2. 시계열 패턴 분석 결과\n")
+                f.write("-" * 40 + "\n")
                 
                 temporal = self.analysis_results.get('temporal_patterns', {})
                 if temporal:
-                    f.write(f"피크 시간대: {temporal.get('peak_hours', [])}\\n")
-                    f.write(f"비피크 시간대: {temporal.get('off_peak_hours', [])}\\n")
-                    f.write(f"주말/평일 사용량 비율: {temporal.get('weekend_ratio', 0):.3f}\\n")
+                    f.write(f"피크 시간대: {temporal.get('peak_hours', [])}\n")
+                    f.write(f"비피크 시간대: {temporal.get('off_peak_hours', [])}\n")
+                    f.write(f"주말/평일 사용량 비율: {temporal.get('weekend_ratio', 0):.3f}\n")
                     
                     # 계절별 패턴
                     seasonal = temporal.get('seasonal_patterns', {})
                     if seasonal:
-                        f.write("\\n계절별 평균 사용량:\\n")
+                        f.write("\n계절별 평균 사용량:\n")
                         for season in ['봄', '여름', '가을', '겨울']:
                             if season in seasonal and 'mean' in seasonal[season]:
-                                f.write(f"  {season}: {seasonal[season]['mean']:.2f}kW\\n")
-                f.write("\\n")
+                                f.write(f"  {season}: {seasonal[season]['mean']:.2f}kW\n")
+                f.write("\n")
                 
                 # 3. 변동성 지표 분석 결과
-                f.write("3. 변동성 지표 분석 결과\\n")
-                f.write("-" * 40 + "\\n")
+                f.write("3. 변동성 지표 분석 결과\n")
+                f.write("-" * 40 + "\n")
                 
                 volatility = self.analysis_results.get('volatility_analysis', {})
                 if volatility:
@@ -883,83 +881,35 @@ class KEPCOTimeSeriesAnalyzer:
                     cv_stats = summary_stats.get('cv_basic', {})
                     
                     if cv_stats:
-                        f.write("기본 변동계수(CV) 통계:\\n")
-                        f.write(f"  평균: {cv_stats.get('mean', 0):.4f}\\n")
-                        f.write(f"  표준편차: {cv_stats.get('std', 0):.4f}\\n")
-                        f.write(f"  최솟값: {cv_stats.get('min', 0):.4f}\\n")
-                        f.write(f"  최댓값: {cv_stats.get('max', 0):.4f}\\n")
+                        f.write("기본 변동계수(CV) 통계:\n")
+                        f.write(f"  평균: {cv_stats.get('mean', 0):.4f}\n")
+                        f.write(f"  표준편차: {cv_stats.get('std', 0):.4f}\n")
+                        f.write(f"  최솟값: {cv_stats.get('min', 0):.4f}\n")
+                        f.write(f"  최댓값: {cv_stats.get('max', 0):.4f}\n")
                         
                     quartiles = volatility.get('quartiles', {})
                     if quartiles:
-                        f.write("\\n변동계수 사분위수:\\n")
-                        f.write(f"  Q1 (25%): {quartiles.get(0.25, 0):.4f}\\n")
-                        f.write(f"  Q2 (50%): {quartiles.get(0.5, 0):.4f}\\n")
-                        f.write(f"  Q3 (75%): {quartiles.get(0.75, 0):.4f}\\n")
-                f.write("\\n")
+                        f.write("\n변동계수 사분위수:\n")
+                        f.write(f"  Q1 (25%): {quartiles.get(0.25, 0):.4f}\n")
+                        f.write(f"  Q2 (50%): {quartiles.get(0.5, 0):.4f}\n")
+                        f.write(f"  Q3 (75%): {quartiles.get(0.75, 0):.4f}\n")
+                f.write("\n")
                 
                 # 4. 이상 패턴 탐지 결과
-                f.write("4. 이상 패턴 탐지 결과\\n")
-                f.write("-" * 40 + "\\n")
+                f.write("4. 이상 패턴 탐지 결과\n")
+                f.write("-" * 40 + "\n")
                 
                 anomaly = self.analysis_results.get('anomaly_analysis', {})
                 if anomaly:
                     total_anomaly = anomaly.get('total_anomaly_customers', 0)
                     anomaly_rate = anomaly.get('anomaly_rate', 0) * 100
-                    f.write(f"이상 패턴 고객: {total_anomaly}명 ({anomaly_rate:.1f}%)\\n")
+                    f.write(f"이상 패턴 고객: {total_anomaly}명 ({anomaly_rate:.1f}%)\n")
                     
                     anomaly_types = anomaly.get('anomaly_types', {})
-                    f.write("\\n이상 패턴 유형별 분포:\\n")
+                    f.write("\n이상 패턴 유형별 분포:\n")
                     for pattern_type, count in anomaly_types.items():
-                        f.write(f"  {pattern_type}: {count}명\\n")
-                f.write("\\n")
-                
-                # 5. 변동계수 개발을 위한 인사이트
-                f.write("5. 변동계수 개발을 위한 핵심 인사이트\\n")
-                f.write("-" * 40 + "\\n")
-                f.write("가. 시간대별 차별화 필요성:\\n")
-                f.write("   - 피크/비피크 시간대별 가중치 적용\\n")
-                f.write("   - 야간 시간대 이상 사용 패턴 별도 처리\\n")
-                f.write("\\n")
-                f.write("나. 요일별 패턴 고려:\\n")
-                f.write("   - 주말/평일 사용 패턴 차이 반영\\n")
-                f.write("   - 요일별 변동성 가중치 조정\\n")
-                f.write("\\n")
-                f.write("다. 계절성 보정:\\n")
-                f.write("   - 월별/계절별 기준값 차별화\\n")
-                f.write("   - 외부 기상 데이터 연계 고려\\n")
-                f.write("\\n")
-                f.write("라. 다차원 변동성 지표:\\n")
-                f.write("   - 기본 변동계수(CV) 외 추가 지표 활용\\n")
-                f.write("   - 시간 윈도우별 변동성 조합\\n")
-                f.write("   - 방향성 변동성 고려\\n")
-                f.write("\\n")
-                f.write("마. 이상 패턴 필터링:\\n")
-                f.write("   - 급격한 변화 및 장기간 0값 처리\\n")
-                f.write("   - 통계적 이상치 제거 알고리즘\\n")
-                f.write("\\n")
-                
-                # 6. 다음 단계 권장사항
-                f.write("6. 다음 단계 권장사항\\n")
-                f.write("-" * 40 + "\\n")
-                f.write("1. 업종별 변동계수 기준값 설정\\n")
-                f.write("   - 계약종별/사용용도별 임계값 차별화\\n")
-                f.write("   - 업종 특성 반영한 가중치 설계\\n")
-                f.write("\\n")
-                f.write("2. 스태킹 알고리즘 개발\\n")
-                f.write("   - Level-0: 개별 변동성 지표 모델\\n")
-                f.write("   - Level-1: 메타모델을 통한 통합 변동계수\\n")
-                f.write("\\n")
-                f.write("3. 외부 데이터 연계\\n")
-                f.write("   - 기상청 기상 데이터 (온도, 습도 등)\\n")
-                f.write("   - 경제 지표 및 업종별 운영 현황\\n")
-                f.write("\\n")
-                f.write("4. 실시간 모니터링 시스템\\n")
-                f.write("   - 변동계수 임계값 기반 알림 시스템\\n")
-                f.write("   - 이상 패턴 자동 탐지 및 보고\\n")
-                f.write("\\n")
-                f.write("5. 성능 검증 및 최적화\\n")
-                f.write("   - 교차검증을 통한 모델 성능 평가\\n")
-                f.write("   - 하이퍼파라미터 튜닝 및 최적화\\n")
+                        f.write(f"  {pattern_type}: {count}명\n")
+                f.write("\n")
                 
             print(f"   💾 종합 리포트 저장: {report_file}")
             return True
@@ -970,7 +920,7 @@ class KEPCOTimeSeriesAnalyzer:
 
     def save_analysis_results(self):
         """분석 결과를 JSON 파일로 저장"""
-        print("\\n💾 8단계: 분석 결과 저장...")
+        print("\n💾 8단계: 분석 결과 저장...")
         
         try:
             # JSON으로 저장 가능한 형태로 변환
@@ -1045,7 +995,7 @@ class KEPCOTimeSeriesAnalyzer:
             end_time = datetime.now()
             duration = end_time - start_time
             
-            print("\\n" + "=" * 80)
+            print("\n" + "=" * 80)
             print("🎉 시계열 패턴 분석 완료!")
             print("=" * 80)
             print(f"소요 시간: {duration}")
@@ -1054,7 +1004,7 @@ class KEPCOTimeSeriesAnalyzer:
             return True
             
         except Exception as e:
-            print(f"\\n❌ 분석 중 오류 발생: {e}")
+            print(f"\n❌ 분석 중 오류 발생: {e}")
             import traceback
             traceback.print_exc()
             return False
