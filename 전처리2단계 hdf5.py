@@ -237,8 +237,8 @@ class KEPCOTimeSeriesAnalyzer:
         ]).round(2)
         
         avg_by_hour = hourly_patterns['mean']
-        peak_threshold = avg_by_hour.quantile(0.75)
-        off_peak_threshold = avg_by_hour.quantile(0.25)
+        peak_threshold = avg_by_hour.quantile(0.8)   # 80% → 상위 20%
+        off_peak_threshold = avg_by_hour.quantile(0.3)   # 30% → 하위 30%
         
         peak_hours = avg_by_hour[avg_by_hour >= peak_threshold].index.tolist()
         off_peak_hours = avg_by_hour[avg_by_hour <= off_peak_threshold].index.tolist()
@@ -850,6 +850,72 @@ class KEPCOTimeSeriesAnalyzer:
             print(f"   ❌ 분석 결과 저장 실패: {e}")
             return False
 
+    def save_peak_analysis_for_cv_algorithm(self):
+        """변동계수 알고리즘용 피크 분석 결과 저장"""
+        print("\n💾 변동계수 알고리즘용 피크 분석 결과 저장...")
+        
+        try:
+            # 이미 분석된 시간 패턴에서 피크 정보 추출
+            temporal = self.analysis_results.get('temporal_patterns', {})
+            
+            if temporal and 'peak_hours' in temporal:
+                # 1. 피크 시간 요약 CSV 저장
+                peak_summary = pd.DataFrame([
+                    {'metric': 'peak_hours', 'value': str(temporal['peak_hours'])},
+                    {'metric': 'off_peak_hours', 'value': str(temporal['off_peak_hours'])},
+                    {'metric': 'weekend_ratio', 'value': temporal.get('weekend_ratio', 0)},
+                    {'metric': 'peak_usage_ratio', 'value': temporal.get('peak_usage_ratio', 0)},
+                    {'metric': 'seasonal_winter_ratio', 'value': temporal.get('seasonal_patterns', {}).get('겨울', {}).get('ratio', 1.0)},
+                    {'metric': 'seasonal_summer_ratio', 'value': temporal.get('seasonal_patterns', {}).get('여름', {}).get('ratio', 1.0)}
+                ])
+                
+                peak_summary_path = os.path.join(self.output_dir, 'peak_time_summary.csv')
+                peak_summary.to_csv(peak_summary_path, index=False, encoding='utf-8-sig')
+                
+                # 2. 시간대별 가중치 JSON 저장
+                peak_hours = temporal['peak_hours']
+                off_peak_hours = temporal['off_peak_hours']
+                
+                hourly_weights = {}
+                for hour in range(24):
+                    if hour in peak_hours:
+                        hourly_weights[hour] = 1.5  # 피크 가중치
+                    elif hour in off_peak_hours:
+                        hourly_weights[hour] = 0.7  # 비피크 가중치
+                    else:
+                        hourly_weights[hour] = 1.0  # 일반
+                
+                weights_data = {
+                    'hourly_weights': hourly_weights,
+                    'peak_info': {
+                        'peak_hours': peak_hours,
+                        'off_peak_hours': off_peak_hours,
+                        'peak_ratio': temporal.get('peak_usage_ratio', 0),
+                        'weekend_ratio': temporal.get('weekend_ratio', 0)
+                    },
+                    'generation_timestamp': datetime.now().isoformat(),
+                    'source': 'stage2_preprocessing'
+                }
+                
+                weights_path = os.path.join(self.output_dir, 'temporal_weights.json')
+                with open(weights_path, 'w', encoding='utf-8') as f:
+                    json.dump(weights_data, f, ensure_ascii=False, indent=2, default=str)
+                
+                print(f"   ✅ 피크 요약: {peak_summary_path}")
+                print(f"   ✅ 가중치: {weights_path}")
+                print(f"   🎯 피크 시간: {peak_hours}")
+                print(f"   🌙 비피크 시간: {off_peak_hours}")
+                
+                return True
+                
+            else:
+                print("   ⚠️ 시계열 패턴 분석 결과 없음")
+                return False
+                
+        except Exception as e:
+            print(f"   ❌ 피크 분석 저장 실패: {e}")
+            return False
+    
     def run_complete_analysis(self):
         """전체 분석 프로세스 실행"""
         start_time = datetime.now()
@@ -890,6 +956,8 @@ class KEPCOTimeSeriesAnalyzer:
             
             # 7. 결과 저장
             self.save_analysis_results()
+            
+            self.save_peak_analysis_for_cv_algorithm()
             
             end_time = datetime.now()
             duration = end_time - start_time
