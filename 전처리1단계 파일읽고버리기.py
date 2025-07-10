@@ -123,9 +123,11 @@ class KEPCODataAnalyzer:
                 hdf5_path = './analysis_results/processed_lp_data.h5'
                 try:
                     if i == 0:
-                        df.to_hdf(hdf5_path, key='df', mode='w', format='table')
+                        df.to_hdf(hdf5_path, key='df', mode='w', format='table', 
+                                  complib='zlib', complevel=9)
                     else:
-                        df.to_hdf(hdf5_path, key='df', mode='a', format='table', append=True)
+                        df.to_hdf(hdf5_path, key='df', mode='a', format='table', append=True,
+                                  complib='zlib', complevel=9)
                 except Exception as hdf_error:
                     print(f"      ⚠️ HDF5 저장 실패: {hdf_error}")
                     print(f"      💡 해결방법: pip install tables")
