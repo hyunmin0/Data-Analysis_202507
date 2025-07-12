@@ -16,43 +16,97 @@ warnings.filterwarnings('ignore')
 
 class FastKEPCOJSONGenerator:
     
-    def __init__(self, sample_size=25000, n_jobs=-1):
-        self.sample_size = sample_size  # 약 500명에 해당
+    def __init__(self, target_customers=500, records_per_customer=100, n_jobs=-1):
+        self.target_customers = target_customers      # 500명
+        self.records_per_customer = records_per_customer  # 고객당 100개
+        self.sample_size = target_customers * records_per_customer  # 총 50,000개
+        
         self.n_jobs = cpu_count() if n_jobs == -1 else n_jobs
         self.analysis_results = {}
         
     def load_hdf5_data(self, hdf5_path='./analysis_results/processed_lp_data.h5'):
+        """✅ 수정: 스마트 샘플링 적용"""
         with pd.HDFStore(hdf5_path, mode='r') as store:
             total_rows = store.get_storer('df').nrows
         
+        print(f"   📊 전체 데이터: {total_rows:,}건")
+        print(f"   🎯 목표: {self.target_customers}명 × {self.records_per_customer}개 = {self.sample_size:,}건")
+        
         if self.sample_size >= total_rows:
+            # 전체 데이터가 작으면 모두 로딩
             self.df = pd.read_hdf(hdf5_path, key='df')
         else:
-            step = total_rows // self.sample_size
-            start_indices = list(range(0, total_rows, step))[:self.sample_size]
-            
-            chunks = []
-            for start in start_indices:
-                chunk = pd.read_hdf(hdf5_path, key='df', start=start, stop=start+1)
-                chunks.append(chunk)
-            
-            self.df = pd.concat(chunks, ignore_index=True)
+            # ✅ 스마트 샘플링 적용
+            self.df = self._smart_sampling_from_hdf5(hdf5_path, total_rows)
         
         self._prepare_datetime_features()
+        
+        print(f"   ✅ 최종 로딩: {len(self.df):,}건")
+        print(f"   👥 고객 수: {self.df['대체고객번호'].nunique()}명")
     
-    def _prepare_datetime_features(self):
-        if 'datetime' not in self.df.columns:
-            self.df['datetime'] = pd.to_datetime(self.df['LP 수신일자'])
+    def _smart_sampling_from_hdf5(self, hdf5_path, total_rows):
+        """✅ 새로 추가: HDF5에서 스마트 샘플링"""
+        print("   🎯 스마트 샘플링 적용 중...")
         
-        self.df['hour'] = self.df['datetime'].dt.hour
-        self.df['day_of_week'] = self.df['datetime'].dt.dayofweek
-        self.df['month'] = self.df['datetime'].dt.month
-        self.df['is_weekend'] = self.df['day_of_week'].isin([5, 6])
+        # 1. 먼저 고객 정보 파악 (일부 데이터만 읽어서)
+        sample_chunk = pd.read_hdf(hdf5_path, key='df', start=0, stop=min(50000, total_rows))
         
-        season_map = {3: '봄', 4: '봄', 5: '봄', 6: '여름', 
-                     7: '여름', 8: '여름', 9: '가을', 10: '가을', 
-                     11: '가을', 12: '겨울', 1: '겨울', 2: '겨울'}
-        self.df['season'] = self.df['month'].map(season_map)
+        # 2. 고객별 데이터 분포 파악
+        customer_counts = sample_chunk['대체고객번호'].value_counts()
+        available_customers = customer_counts.index.tolist()
+        
+        print(f"      발견된 고객: {len(available_customers)}명")
+        
+        # 3. 목표 고객 수만큼 선택
+        target_customers = min(self.target_customers, len(available_customers))
+        selected_customers = np.random.choice(
+            available_customers, 
+            size=target_customers, 
+            replace=False
+        ).tolist()
+        
+        print(f"      선택된 고객: {len(selected_customers)}명")
+        
+        # 4. 선택된 고객들의 데이터만 로딩
+        chunks = []
+        chunk_size = 10000  # 한 번에 읽을 크기
+        
+        for start in range(0, total_rows, chunk_size):
+            end = min(start + chunk_size, total_rows)
+            chunk = pd.read_hdf(hdf5_path, key='df', start=start, stop=end)
+            
+            # 선택된 고객만 필터링
+            filtered_chunk = chunk[chunk['대체고객번호'].isin(selected_customers)]
+            
+            if len(filtered_chunk) > 0:
+                chunks.append(filtered_chunk)
+            
+            # 메모리 관리
+            del chunk
+            
+            # 목표량 달성하면 중단
+            if sum(len(c) for c in chunks) >= self.sample_size:
+                print(f"      목표량 달성, 조기 종료")
+                break
+        
+        # 5. 결합 및 최종 샘플링
+        combined_df = pd.concat(chunks, ignore_index=True)
+        
+        # 6. 각 고객별로 균등하게 샘플링
+        final_chunks = []
+        for customer_id in selected_customers:
+            customer_data = combined_df[combined_df['대체고객번호'] == customer_id]
+            
+            if len(customer_data) <= self.records_per_customer:
+                # 데이터가 적으면 모두 사용
+                final_chunks.append(customer_data)
+            else:
+                # 균등 간격으로 샘플링
+                indices = np.linspace(0, len(customer_data)-1, self.records_per_customer, dtype=int)
+                sampled_data = customer_data.iloc[indices]
+                final_chunks.append(sampled_data)
+        
+        return pd.concat(final_chunks, ignore_index=True)
     
     def analyze_temporal_patterns(self):
         target_col = '순방향 유효전력'
@@ -277,10 +331,13 @@ class FastKEPCOJSONGenerator:
     def generate_json_result(self, output_path='./analysis_results/analysis_results2.json'):
         self.analysis_results['metadata'] = {
             'timestamp': datetime.now().isoformat(),
-            'stage': 'step2_500_sample_analysis',
-            'version': '2.0_optimized',
+            'stage': 'step2_smart_sampling_analysis',
+            'version': '3.0_smart_sampling',
             'sample_size': len(self.df) if hasattr(self, 'df') else 0,
             'total_customers': self.df['대체고객번호'].nunique() if hasattr(self, 'df') else 0,
+            'target_customers': self.target_customers,
+            'records_per_customer': self.records_per_customer,
+            'sampling_method': 'smart_customer_based',
             'processing_cores': self.n_jobs
         }
         
@@ -304,7 +361,15 @@ class FastKEPCOJSONGenerator:
 
 
 def main():
-    analyzer = FastKEPCOJSONGenerator(sample_size=25000)
+    target_customers = 500      # 500명
+    records_per_customer = 100  # 고객당 100개 (약 1일치)
+    
+    print(f"🎯 목표: {target_customers}명 × {records_per_customer}개 = {target_customers * records_per_customer:,}건")
+    
+    analyzer = FastKEPCOJSONGenerator(
+        target_customers=target_customers,
+        records_per_customer=records_per_customer
+    )
     result_path = analyzer.run_fast_analysis()
     return result_path
 
