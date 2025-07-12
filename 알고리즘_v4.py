@@ -17,6 +17,11 @@ from sklearn.metrics import mean_absolute_error, r2_score
 from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
+import matplotlib.pyplot as plt
+from math import pi
+from sklearn.metrics import mean_squared_error
+import matplotlib
+matplotlib.rcParams['font.family'] = 'DejaVu Sans'
 
 class KEPCOSamplingVolatilityAnalyzer:
     """한국전력공사 변동계수 스태킹 분석기 (샘플링 최적화 버전)"""
