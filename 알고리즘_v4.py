@@ -514,9 +514,7 @@ class KEPCOSamplingVolatilityAnalyzer:
         # Level-0 모델들
         self.level0_models = {
             'rf': RandomForestRegressor(n_estimators=50, max_depth=8, random_state=42),
-            'gbm': GradientBoostingRegressor(n_estimators=50, max_depth=6, random_state=42),
-            'ridge': Ridge(alpha=1.0),
-            'linear': LinearRegression()
+            'gbm': GradientBoostingRegressor(n_estimators=50, max_depth=6, random_state=42)
         }
         
         # 교차검증으로 메타 특성 생성
