@@ -1,7 +1,3 @@
-"""
-한국전력 데이터 고속 JSON 생성기 - 500명 샘플링 특화 버전
-"""
-
 import pandas as pd
 import numpy as np
 import json
@@ -25,28 +21,28 @@ class FastKEPCOJSONGenerator:
         self.analysis_results = {}
         
     def load_hdf5_data(self, hdf5_path='./analysis_results/processed_lp_data.h5'):
-        """✅ 수정: 스마트 샘플링 적용"""
+        """스마트 샘플링 적용"""
         with pd.HDFStore(hdf5_path, mode='r') as store:
             total_rows = store.get_storer('df').nrows
         
-        print(f"   📊 전체 데이터: {total_rows:,}건")
-        print(f"   🎯 목표: {self.target_customers}명 × {self.records_per_customer}개 = {self.sample_size:,}건")
+        print(f"   전체 데이터: {total_rows:,}건")
+        print(f"   목표: {self.target_customers}명 × {self.records_per_customer}개 = {self.sample_size:,}건")
         
         if self.sample_size >= total_rows:
             # 전체 데이터가 작으면 모두 로딩
             self.df = pd.read_hdf(hdf5_path, key='df')
         else:
-            # ✅ 스마트 샘플링 적용
+            # 스마트 샘플링 적용
             self.df = self._smart_sampling_from_hdf5(hdf5_path, total_rows)
         
         self._prepare_datetime_features()
         
-        print(f"   ✅ 최종 로딩: {len(self.df):,}건")
-        print(f"   👥 고객 수: {self.df['대체고객번호'].nunique()}명")
+        print(f"   최종 로딩: {len(self.df):,}건")
+        print(f"   고객 수: {self.df['대체고객번호'].nunique()}명")
     
     def _smart_sampling_from_hdf5(self, hdf5_path, total_rows):
-        """✅ 새로 추가: HDF5에서 스마트 샘플링"""
-        print("   🎯 스마트 샘플링 적용 중...")
+        """HDF5에서 스마트 샘플링"""
+        print("   스마트 샘플링 적용 중...")
         
         # 1. 먼저 고객 정보 파악 (일부 데이터만 읽어서)
         sample_chunk = pd.read_hdf(hdf5_path, key='df', start=0, stop=min(50000, total_rows))
@@ -108,7 +104,23 @@ class FastKEPCOJSONGenerator:
         
         return pd.concat(final_chunks, ignore_index=True)
     
+    def _prepare_datetime_features(self):
+        """datetime 관련 특성 생성"""
+        if 'datetime' not in self.df.columns:
+            self.df['datetime'] = pd.to_datetime(self.df['LP 수신일자'], errors='coerce')
+        
+        self.df['hour'] = self.df['datetime'].dt.hour
+        self.df['day_of_week'] = self.df['datetime'].dt.dayofweek
+        self.df['month'] = self.df['datetime'].dt.month
+        self.df['season'] = self.df['month'].map({12: '겨울', 1: '겨울', 2: '겨울',
+                                                 3: '봄', 4: '봄', 5: '봄',
+                                                 6: '여름', 7: '여름', 8: '여름',
+                                                 9: '가을', 10: '가을', 11: '가을'})
+        self.df['is_weekend'] = self.df['day_of_week'].isin([5, 6]).astype(int)
+    
     def analyze_temporal_patterns(self):
+        """시간대별 패턴 분석"""
+        print("   시간대별 패턴 분석 중...")
         target_col = '순방향 유효전력'
         
         hourly_stats = self.df.groupby('hour')[target_col].agg(['mean', 'std', 'min', 'max', 'count']).round(2)
@@ -133,8 +145,12 @@ class FastKEPCOJSONGenerator:
             'off_peak_hours': off_peak_hours,
             'weekend_ratio': float(weekend_ratio)
         }
+        
+        print("   시간대별 패턴 분석 완료")
     
     def analyze_volatility_parallel(self):
+        """변동성 분석 (병렬 처리)"""
+        print("   변동성 분석 중...")
         target_col = '순방향 유효전력'
         
         overall_cv = self.df[target_col].std() / self.df[target_col].mean()
@@ -151,7 +167,6 @@ class FastKEPCOJSONGenerator:
         customers = self.df['대체고객번호'].unique()
         customer_cvs = self._calculate_customer_cv_chunk(target_col, customers)
             
-      
         cv_values = list(customer_cvs.values())
         customer_cv_stats = {
             'count': len(cv_values),
@@ -184,6 +199,8 @@ class FastKEPCOJSONGenerator:
             'customer_cv_stats': customer_cv_stats,
             'volatility_distribution': volatility_distribution
         }
+        
+        print("   변동성 분석 완료")
     
     def _calculate_customer_cv_chunk(self, target_col, customer_chunk):
         """고객 청크별 변동계수 계산"""
@@ -197,6 +214,8 @@ class FastKEPCOJSONGenerator:
         return results
     
     def analyze_anomalies_fast(self):
+        """이상 패턴 고속 분석"""
+        print("   이상 패턴 분석 중...")
         target_col = '순방향 유효전력'
         customers = self.df['대체고객번호'].unique()
         
@@ -225,110 +244,36 @@ class FastKEPCOJSONGenerator:
         if len(self.df) > 10000:
             sample_df = self.df.sample(n=10000, random_state=42)
             sample_df = sample_df.sort_values(['대체고객번호', 'datetime'])
-            diff = sample_df.groupby('대체고객번호')[target_col].diff().abs()
-            sudden_changes = (diff > diff.quantile(0.95)).sum()
+            diff = sample_df[target_col].diff().abs()
+            sudden_threshold = diff.quantile(0.95)
+            sudden_changes = (diff > sudden_threshold).sum()
         
-        sudden_change_rate = sudden_changes / len(customers) if len(customers) > 0 else 0
+        sudden_change_rate = sudden_changes / len(self.df) if len(self.df) > 0 else 0
         
-        sample_customers = customers[:min(50, len(customers))]
-        anomaly_customers = {
-            'high_night_usage': 0,
-            'excessive_zeros': 0,
-            'high_volatility': 0,
-            'statistical_outliers': 0
-        }
-        
-        for customer_id in sample_customers:
-            customer_data = self.df[self.df['대체고객번호'] == customer_id]
-            
-            if night_day_ratio > 1.2:
-                anomaly_customers['high_night_usage'] += 1
-            
-            customer_zeros = (customer_data[target_col] == 0).sum()
-            if customer_zeros / len(customer_data) > 0.1:
-                anomaly_customers['excessive_zeros'] += 1
-            
-            customer_cv = customer_data[target_col].std() / customer_data[target_col].mean()
-            if customer_cv > 0.5:
-                anomaly_customers['high_volatility'] += 1
-            
-            customer_outliers = customer_data[
-                (customer_data[target_col] < lower_bound) | 
-                (customer_data[target_col] > upper_bound)
-            ]
-            if len(customer_outliers) / len(customer_data) > 0.05:
-                anomaly_customers['statistical_outliers'] += 1
-        
-        total_anomaly_customers = sum(anomaly_customers.values())
-        anomaly_rate = (total_anomaly_customers / len(sample_customers)) * 100
+        # 이상 고객 감지 (변동계수 기준)
+        customer_cvs = self._calculate_customer_cv_chunk(target_col, customers)
+        cv_values = list(customer_cvs.values())
+        cv_threshold = np.percentile(cv_values, 95) if cv_values else 1.0
+        anomaly_customers = [cid for cid, cv in customer_cvs.items() if cv > cv_threshold]
+        anomaly_rate = len(anomaly_customers) / len(customers) if len(customers) > 0 else 0
         
         self.analysis_results['anomaly_analysis'] = {
-            'processed_customers': len(sample_customers),
-            'total_outliers': int(len(outliers)),
+            'outlier_count': int(len(outliers)),
             'outlier_rate': float(len(outliers) / len(self.df)),
             'zero_count': int(zero_count),
             'zero_rate': float(zero_rate),
-            'sudden_changes': int(sudden_changes),
-            'sudden_change_rate': float(sudden_change_rate),
-            'night_day_ratio': float(night_day_ratio),
-            'anomaly_customers': anomaly_customers,
-            'estimated_anomaly_rate': float(anomaly_rate)
-        }
-        sample_customers = customers[:min(50, len(customers))]
-        anomaly_customers = {
-            'high_night_usage': 0,
-            'excessive_zeros': 0,
-            'high_volatility': 0,
-            'statistical_outliers': 0
-        }
-        
-        for customer_id in sample_customers:
-            customer_data = self.df[self.df['대체고객번호'] == customer_id]
-            
-            # 야간 과다 사용 (간단한 임계값)
-            if night_day_ratio > 1.2:
-                anomaly_customers['high_night_usage'] += 1
-            
-            # 제로값 과다
-            customer_zeros = (customer_data[target_col] == 0).sum()
-            if customer_zeros / len(customer_data) > 0.1:
-                anomaly_customers['excessive_zeros'] += 1
-            
-            # 높은 변동성
-            customer_cv = customer_data[target_col].std() / customer_data[target_col].mean()
-            if customer_cv > 0.5:
-                anomaly_customers['high_volatility'] += 1
-            
-            # 통계적 이상치
-            customer_outliers = customer_data[
-                (customer_data[target_col] < lower_bound) | 
-                (customer_data[target_col] > upper_bound)
-            ]
-            if len(customer_outliers) / len(customer_data) > 0.05:
-                anomaly_customers['statistical_outliers'] += 1
-        
-        # 전체 추정
-        total_anomaly_customers = sum(anomaly_customers.values())
-        anomaly_rate = (total_anomaly_customers / len(sample_customers)) * 100
-        
-        # 결과 저장
-        self.analysis_results['anomaly_analysis'] = {
-            'processed_customers': len(sample_customers),
-            'total_outliers': int(len(outliers)),
-            'outlier_rate': float(len(outliers) / len(self.df)),
-            'zero_count': int(zero_count),
-            'zero_rate': float(zero_rate),
-            'sudden_changes': int(sudden_changes),
+            'sudden_change_count': int(sudden_changes),
             'sudden_change_rate': float(sudden_change_rate),
             'night_day_ratio': float(night_day_ratio),
             'anomaly_customers': anomaly_customers,
             'estimated_anomaly_rate': float(anomaly_rate)
         }
         
-        print(f"   ✅ 이상 패턴 분석 완료")
+        print("   이상 패턴 분석 완료")
         return True
     
     def generate_json_result(self, output_path='./analysis_results/analysis_results2.json'):
+        """결과를 JSON으로 저장"""
         self.analysis_results['metadata'] = {
             'timestamp': datetime.now().isoformat(),
             'stage': 'step2_smart_sampling_analysis',
@@ -347,6 +292,9 @@ class FastKEPCOJSONGenerator:
         return output_path
     
     def run_fast_analysis(self, hdf5_path='./analysis_results/processed_lp_data.h5'):
+        """전체 분석 실행"""
+        print("2단계 고속 분석 시작...")
+        
         self.load_hdf5_data(hdf5_path)
         self.analyze_temporal_patterns()
         self.analyze_volatility_parallel()
@@ -357,20 +305,27 @@ class FastKEPCOJSONGenerator:
             del self.df
         gc.collect()
         
+        print(f"분석 완료. 결과 저장: {output_path}")
         return output_path
 
 
 def main():
+    """메인 실행 함수"""
     target_customers = 500      # 500명
     records_per_customer = 100  # 고객당 100개 (약 1일치)
     
-    print(f"🎯 목표: {target_customers}명 × {records_per_customer}개 = {target_customers * records_per_customer:,}건")
+    print("한국전력 데이터 고속 JSON 생성기")
+    print("="*50)
+    print(f"목표: {target_customers}명 × {records_per_customer}개 = {target_customers * records_per_customer:,}건")
     
     analyzer = FastKEPCOJSONGenerator(
         target_customers=target_customers,
         records_per_customer=records_per_customer
     )
     result_path = analyzer.run_fast_analysis()
+    
+    print(f"\n2단계 전처리 완료")
+    print(f"결과 파일: {result_path}")
     return result_path
 
 
