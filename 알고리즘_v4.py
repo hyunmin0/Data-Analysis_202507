@@ -3,6 +3,7 @@
 - 이전 코드의 모든 고급 기능 유지
 - 샘플링으로 속도 10배 향상
 - 정확도는 거의 동일하게 유지
+- 고속모드 제거 (샘플링만으로 충분)
 """
 
 import pandas as pd
@@ -39,8 +40,7 @@ class KEPCOSamplingVolatilityAnalyzer:
             'time_sample_ratio': 0.2,          # 시간 데이터의 20%만 샘플링  
             'min_customers': 20,               # 최소 고객 수
             'min_records_per_customer': 50,    # 고객당 최소 레코드 수
-            'stratified_sampling': True,       # 계층 샘플링 사용
-            'fast_mode': False                  # 고속 모드 (일부 기능 간소화)
+            'stratified_sampling': True        # 계층 샘플링 사용
         }
         
         # 기존 전처리 결과 로딩
@@ -51,7 +51,6 @@ class KEPCOSamplingVolatilityAnalyzer:
         
         print("🔧 한국전력공사 변동계수 스태킹 분석기 초기화 (샘플링 최적화)")
         print(f"   📊 샘플링 설정: 고객 {self.sampling_config['customer_sample_ratio']*100:.0f}%, 시간 {self.sampling_config['time_sample_ratio']*100:.0f}%")
-        print(f"   ⚡ 고속 모드: {'ON' if self.sampling_config['fast_mode'] else 'OFF'}")
         
     def _load_step1_results(self):
         """1단계 전처리 결과 로딩"""
@@ -251,17 +250,13 @@ class KEPCOSamplingVolatilityAnalyzer:
         print(f"      계층별 샘플링: 소형{small_n}명, 중형{medium_n}명, 대형{large_n}명")
         return sampled
     
-    def calculate_enhanced_volatility_coefficient_fast(self, optimize_weights=None):
+    def calculate_enhanced_volatility_coefficient(self, optimize_weights=True):
         """향상된 변동계수 계산 (샘플링 최적화 버전)"""
         print("\n📐 향상된 변동계수 계산 중 (샘플링 최적화)...")
         
         if self.lp_data is None:
             print("   ❌ LP 데이터가 로딩되지 않았습니다.")
             return {}
-        
-        # 고속 모드 설정에 따라 가중치 최적화 결정
-        if optimize_weights is None:
-            optimize_weights = not self.sampling_config['fast_mode']
         
         # 2단계 결과에서 시간 패턴 정보 가져오기
         temporal_patterns = self.step2_results.get('temporal_patterns', {})
@@ -318,13 +313,14 @@ class KEPCOSamplingVolatilityAnalyzer:
         
         print(f"   ✅ {processed_count}명 변동성 지표 계산 완료")
         
-        # 가중치 최적화 (고속 모드에서는 스킵)
-        if optimize_weights and len(volatility_components) >= 10:
-            optimal_weights = self.optimize_volatility_weights_fast(volatility_components)
-        else:
-            optimal_weights = [0.35, 0.25, 0.20, 0.10, 0.10]  # 기본 가중치
-            if not optimize_weights:
-                print(f"   ⚡ 고속 모드: 기본 가중치 사용")
+        # 가중치 최적화 (필수)
+        if not optimize_weights:
+            raise ValueError("가중치 최적화가 비활성화되었습니다. optimize_weights=True로 설정하세요.")
+        
+        if len(volatility_components) < 10:
+            raise ValueError(f"가중치 최적화를 위해서는 최소 10개의 고객 데이터가 필요합니다. (현재: {len(volatility_components)}개)")
+        
+        optimal_weights = self.optimize_volatility_weights(volatility_components)
         
         print(f"   🎯 최종 가중치: {[round(w, 3) for w in optimal_weights]}")
         
@@ -432,20 +428,19 @@ class KEPCOSamplingVolatilityAnalyzer:
         except Exception as e:
             return None
     
-    def optimize_volatility_weights_fast(self, volatility_components):
-        """가중치 최적화 (빠른 버전)"""
-        print("\n⚙️ 가중치 최적화 중 (고속 버전)...")
+    def optimize_volatility_weights(self, volatility_components):
+        """가중치 최적화 (필수)"""
+        print("\n⚙️ 가중치 최적화 중...")
         
         try:
             from scipy.optimize import minimize
         except ImportError:
-            print("   ⚠️ scipy가 설치되지 않아 기본 가중치 사용")
-            return [0.35, 0.25, 0.20, 0.10, 0.10]
+            raise ImportError("scipy가 설치되지 않았습니다. 'pip install scipy'로 설치해주세요.")
         
-        # 간단한 목표 함수 (빠른 계산)
+        # 목표 함수 정의
         components_df = pd.DataFrame(volatility_components)
         
-        # 목표 변수: 간단한 불안정성 지표
+        # 목표 변수: 영업활동 불안정성 지표
         target_instability = (
             components_df['basic_cv'] * 2.0 +
             components_df['zero_ratio'] * 1.0 +
@@ -455,7 +450,7 @@ class KEPCOSamplingVolatilityAnalyzer:
         X = components_df[['basic_cv', 'hourly_cv', 'peak_cv', 'weekend_diff', 'seasonal_cv']].values
         y = target_instability
         
-        # 간단한 최소제곱법
+        # 최적화 목표 함수
         def objective(weights):
             predicted = X @ weights
             return np.mean((predicted - y) ** 2)
@@ -464,22 +459,18 @@ class KEPCOSamplingVolatilityAnalyzer:
         bounds = [(0, 1) for _ in range(5)]
         initial_weights = [0.35, 0.25, 0.20, 0.10, 0.10]
         
-        try:
-            result = minimize(objective, initial_weights, method='SLSQP', 
-                            bounds=bounds, constraints=constraints, 
-                            options={'maxiter': 100})  # 반복 횟수 제한
-            
-            if result.success:
-                print(f"   ✅ 가중치 최적화 완료 (고속)")
-                return result.x.tolist()
-            else:
-                return initial_weights
-        except:
-            return initial_weights
+        result = minimize(objective, initial_weights, method='SLSQP', 
+                        bounds=bounds, constraints=constraints)
+        
+        if not result.success:
+            raise RuntimeError(f"가중치 최적화에 실패했습니다: {result.message}")
+        
+        print(f"   ✅ 가중치 최적화 완료")
+        return result.x.tolist()
     
-    def train_stacking_ensemble_model_fast(self, volatility_results):
-        """스태킹 앙상블 모델 훈련 (고속 버전)"""
-        print("\n🎯 스태킹 앙상블 모델 훈련 중 (고속 버전)...")
+    def train_stacking_ensemble_model(self, volatility_results):
+        """스태킹 앙상블 모델 훈련"""
+        print("\n🎯 스태킹 앙상블 모델 훈련 중...")
         
         if len(volatility_results) < 5:
             print("   ❌ 훈련 데이터가 부족합니다 (최소 5개 필요)")
@@ -520,19 +511,21 @@ class KEPCOSamplingVolatilityAnalyzer:
         X_train_scaled = self.robust_scaler.fit_transform(X_train)
         X_test_scaled = self.robust_scaler.transform(X_test)
         
-        # 간단한 Level-0 모델들 (속도 우선)
+        # Level-0 모델들
         self.level0_models = {
-            'rf': RandomForestRegressor(n_estimators=30, max_depth=5, random_state=42),
-            'gbm': GradientBoostingRegressor(n_estimators=30, max_depth=4, random_state=42)
+            'rf': RandomForestRegressor(n_estimators=50, max_depth=8, random_state=42),
+            'gbm': GradientBoostingRegressor(n_estimators=50, max_depth=6, random_state=42),
+            'ridge': Ridge(alpha=1.0),
+            'linear': LinearRegression()
         }
         
-        # 교차검증 (3-fold로 단축)
-        kf = KFold(n_splits=3, shuffle=True, random_state=42)
+        # 교차검증으로 메타 특성 생성
+        kf = KFold(n_splits=5, shuffle=True, random_state=42)
         
         meta_features_train = np.zeros((len(X_train_scaled), len(self.level0_models)))
         meta_features_test = np.zeros((len(X_test_scaled), len(self.level0_models)))
         
-        print(f"   🔄 Level-0 모델 훈련 (3-Fold CV):")
+        print(f"   🔄 Level-0 모델 훈련 (5-Fold CV):")
         for i, (name, model) in enumerate(self.level0_models.items()):
             fold_predictions = np.zeros(len(X_train_scaled))
             
@@ -559,7 +552,7 @@ class KEPCOSamplingVolatilityAnalyzer:
             except Exception as e:
                 meta_features_test[:, i] = np.mean(y_train)
         
-        # Level-1 메타 모델 (간단한 선형 회귀)
+        # Level-1 메타 모델 (선형 회귀)
         self.meta_model = LinearRegression()
         try:
             self.meta_model.fit(meta_features_train, y_train)
@@ -585,16 +578,16 @@ class KEPCOSamplingVolatilityAnalyzer:
             'sampling_optimized': True
         }
 
-    def analyze_business_stability_fast(self, volatility_results):
-        """영업활동 안정성 분석 (고속 버전)"""
-        print("\n🔍 영업활동 안정성 분석 중 (고속 버전)...")
+    def analyze_business_stability(self, volatility_results):
+        """영업활동 안정성 분석"""
+        print("\n🔍 영업활동 안정성 분석 중...")
         
         if not volatility_results:
             return {}
         
         coefficients = [v['enhanced_volatility_coefficient'] for v in volatility_results.values()]
         
-        # 간단한 분위수 기반 등급
+        # 분위수 기반 등급 분류 (원래대로 3단계)
         p25, p75 = np.percentile(coefficients, [25, 75])
         
         stability_analysis = {}
@@ -603,7 +596,7 @@ class KEPCOSamplingVolatilityAnalyzer:
         for customer_id, data in volatility_results.items():
             coeff = data['enhanced_volatility_coefficient']
             
-            # 3단계 등급 분류
+            # 3단계 등급 분류 (원래대로)
             if coeff <= p25:
                 grade = '안정'
                 risk_level = 'low'
@@ -616,7 +609,7 @@ class KEPCOSamplingVolatilityAnalyzer:
             
             grade_counts[grade] += 1
             
-            # 간단한 위험 요인
+            # 위험 요인 분석
             risk_factors = []
             if data.get('zero_ratio', 0) > 0.1:
                 risk_factors.append('빈번한_사용중단')
@@ -624,14 +617,24 @@ class KEPCOSamplingVolatilityAnalyzer:
                 risk_factors.append('낮은_부하율')
             if data.get('peak_cv', 0) > data.get('basic_cv', 0) * 2:
                 risk_factors.append('피크시간_불안정')
+            if data.get('weekend_diff', 0) > 0.3:
+                risk_factors.append('주말_패턴_급변')
+            if data.get('extreme_changes', 0) > data.get('data_points', 1) * 0.05:
+                risk_factors.append('급격한_변화_빈발')
+            
+            # 안정성 점수 계산 (0-100점)
+            stability_score = max(0, 100 - (coeff * 400))
             
             stability_analysis[customer_id] = {
                 'enhanced_volatility_coefficient': round(coeff, 4),
                 'stability_grade': grade,
                 'risk_level': risk_level,
+                'stability_score': round(stability_score, 1),
                 'risk_factors': risk_factors,
                 'load_factor': data.get('load_factor', 0.0),
-                'peak_load_ratio': data.get('peak_load_ratio', 1.0)
+                'peak_load_ratio': data.get('peak_load_ratio', 1.0),
+                'zero_ratio': data.get('zero_ratio', 0.0),
+                'extreme_changes': data.get('extreme_changes', 0)
             }
         
         print(f"   📋 안정성 등급 분포:")
@@ -665,17 +668,16 @@ class KEPCOSamplingVolatilityAnalyzer:
         report = {
             'analysis_metadata': {
                 'timestamp': pd.Timestamp.now().isoformat(),
-                'algorithm_version': 'sampling_optimized_v1',
+                'algorithm_version': 'sampling_optimized_v2',
                 'sampling_config': self.sampling_config,
                 'total_customers_analyzed': len(volatility_results),
-                'execution_mode': 'fast_sampling'
+                'execution_mode': 'sampling_optimized'
             },
             
             'sampling_summary': {
                 'customer_sample_ratio': self.sampling_config['customer_sample_ratio'],
                 'time_sample_ratio': self.sampling_config['time_sample_ratio'],
-                'stratified_sampling_used': self.sampling_config['stratified_sampling'],
-                'fast_mode_enabled': self.sampling_config['fast_mode']
+                'stratified_sampling_used': self.sampling_config['stratified_sampling']
             },
             
             'volatility_coefficient_summary': {
@@ -699,13 +701,13 @@ class KEPCOSamplingVolatilityAnalyzer:
             'risk_analysis': {
                 'high_risk_customers': len(high_risk_customers),
                 'high_risk_percentage': round(len(high_risk_customers) / len(stability_analysis) * 100, 1) if stability_analysis else 0,
-                'top_risk_factors': dict(risk_factor_counts.most_common(3))
+                'top_risk_factors': dict(risk_factor_counts.most_common(5))
             },
             
             'performance_optimization': {
                 'data_reduction_achieved': True,
                 'accuracy_maintained': model_performance['final_r2'] >= 0.3 if model_performance else False,
-                'fast_execution': True
+                'sampling_effective': True
             },
             
             'business_insights': [
@@ -713,18 +715,139 @@ class KEPCOSamplingVolatilityAnalyzer:
                 f"데이터 크기 {(1-self.sampling_config['customer_sample_ratio'])*100:.0f}% 감소로 속도 향상",
                 f"모델 예측 정확도(R²): {model_performance['final_r2']:.3f}" if model_performance else "모델 성능 측정 불가",
                 f"고위험 고객 {len(high_risk_customers)}명 식별",
-                "실무 적용 가능한 고속 분석 시스템 구축"
+                "실무 적용 가능한 효율적 분석 시스템 구축"
             ],
             
             'recommendations': [
                 "샘플링 비율 조정을 통한 속도-정확도 균형 최적화",
                 "계층별 샘플링으로 대표성 확보",
-                "실시간 모니터링을 위한 고속 분석 체계",
+                "실시간 모니터링을 위한 효율적 분석 체계",
                 "주기적 전체 데이터 검증으로 샘플링 편향 확인"
             ]
         }
         
         return report
+
+    def create_volatility_components_radar_chart(self, volatility_results, save_path='./analysis_results'):
+        """변동계수 구성요소 레이더 차트 생성"""
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from math import pi
+        import os
+        
+        print("\n📊 변동계수 구성요소 레이더 차트 생성 중...")
+        
+        if not volatility_results:
+            print("   ❌ 변동계수 결과가 없습니다.")
+            return None
+        
+        # 구성요소 이름 및 순서 정의
+        components = ['기본 CV', '시간대별 CV', '피크 CV', '주말 차이', '계절별 CV']
+        component_keys = ['basic_cv', 'hourly_cv', 'peak_cv', 'weekend_diff', 'seasonal_cv']
+        
+        # 데이터 추출 및 정규화
+        customers_data = {}
+        all_values = {key: [] for key in component_keys}
+        
+        # 모든 고객의 데이터 수집
+        for customer_id, data in volatility_results.items():
+            customer_values = []
+            for key in component_keys:
+                value = data.get(key, 0)
+                # 이상값 처리
+                if np.isnan(value) or np.isinf(value):
+                    value = 0
+                customer_values.append(value)
+                all_values[key].append(value)
+            customers_data[customer_id] = customer_values
+        
+        # 정규화를 위한 최대값 계산 (각 구성요소별)
+        max_values = []
+        for key in component_keys:
+            values = all_values[key]
+            if values:
+                max_val = max(values) if max(values) > 0 else 1
+                max_values.append(max_val)
+            else:
+                max_values.append(1)
+        
+        # 상위 5명의 고객 선택 (변동계수가 높은 순)
+        top_customers = sorted(
+            volatility_results.items(),
+            key=lambda x: x[1].get('enhanced_volatility_coefficient', 0),
+            reverse=True
+        )[:5]
+        
+        # 레이더 차트 설정
+        fig, ax = plt.subplots(figsize=(12, 10), subplot_kw=dict(projection='polar'))
+        
+        # 각도 계산 (5개 항목)
+        angles = [n / float(len(components)) * 2 * pi for n in range(len(components))]
+        angles += angles[:1]  # 원을 닫기 위해
+        
+        # 색상 팔레트
+        colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FECA57']
+        
+        # 각 고객별 레이더 차트 그리기
+        for i, (customer_id, data) in enumerate(top_customers):
+            if i >= 5:  # 최대 5명만
+                break
+                
+            # 데이터 정규화 (0-1 범위)
+            values = []
+            for j, key in enumerate(component_keys):
+                raw_value = data.get(key, 0)
+                if np.isnan(raw_value) or np.isinf(raw_value):
+                    raw_value = 0
+                normalized_value = raw_value / max_values[j] if max_values[j] > 0 else 0
+                values.append(min(normalized_value, 1.0))  # 1.0으로 클리핑
+            
+            values += values[:1]  # 원을 닫기 위해
+            
+            # 선 그리기
+            ax.plot(angles, values, 'o-', linewidth=2, label=f'{customer_id}', color=colors[i], markersize=6)
+            # 영역 채우기 (투명도 적용)
+            ax.fill(angles, values, alpha=0.15, color=colors[i])
+        
+        # 라벨 설정
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(components, fontsize=11, fontweight='bold')
+        
+        # Y축 설정 (0-1 범위)
+        ax.set_ylim(0, 1)
+        ax.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
+        ax.set_yticklabels(['0.2', '0.4', '0.6', '0.8', '1.0'], fontsize=9)
+        ax.grid(True, alpha=0.3)
+        
+        # 제목 및 범례
+        plt.title('변동계수 구성요소 분석 (상위 5개 고객)', 
+                  fontsize=16, fontweight='bold', pad=30)
+        plt.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0), fontsize=10)
+        
+        # 서브 제목 (정규화 설명)
+        fig.text(0.5, 0.02, '※ 각 구성요소는 최대값으로 정규화됨 (0-1 범위)', 
+                 ha='center', fontsize=9, style='italic')
+        
+        # 통계 정보 추가
+        stats_text = f"분석 고객 수: {len(volatility_results)}명\n"
+        stats_text += f"평균 변동계수: {np.mean([v.get('enhanced_volatility_coefficient', 0) for v in volatility_results.values()]):.4f}"
+        fig.text(0.02, 0.95, stats_text, fontsize=9, verticalalignment='top',
+                 bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+        
+        plt.tight_layout()
+        
+        # 저장
+        os.makedirs(save_path, exist_ok=True)
+        chart_path = os.path.join(save_path, 'volatility_components_radar.png')
+        plt.savefig(chart_path, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        print(f"   ✅ 레이더 차트 저장: {chart_path}")
+        
+        return {
+            'chart_path': chart_path,
+            'top_customers': [customer_id for customer_id, _ in top_customers]
+        }
 
 def create_sampling_test_environment():
     """샘플링 테스트 환경 생성"""
@@ -733,7 +856,7 @@ def create_sampling_test_environment():
     import json
     os.makedirs('./analysis_results', exist_ok=True)
     
-    # 1단계, 2단계 결과 생성 (기존과 동일)
+    # 1단계, 2단계 결과 생성
     step1_results = {
         'metadata': {'timestamp': datetime.now().isoformat(), 'total_customers': 200}
     }
@@ -750,7 +873,7 @@ def create_sampling_test_environment():
     with open('./analysis_results/analysis_results2.json', 'w', encoding='utf-8') as f:
         json.dump(step2_results, f, ensure_ascii=False, indent=2, default=str)
     
-    # 더 큰 LP 데이터 생성 (200명, 14일) - 샘플링 효과 확인용
+    # 더 큰 LP 데이터 생성 (200명, 14일)
     print("   📊 대용량 테스트 LP 데이터 생성 중...")
     
     np.random.seed(42)
@@ -798,501 +921,10 @@ def create_sampling_test_environment():
     
     df = pd.DataFrame(data)
     
-    # CSV로 저장 (HDF5는 선택사항)
+    # CSV로 저장
     df.to_csv('./analysis_results/processed_lp_data.csv', index=False)
     print(f"   ✅ 대용량 테스트 데이터 생성: {len(df):,}건, {df['대체고객번호'].nunique()}명")
 
-def create_volatility_components_radar_chart(self, volatility_results, save_path='./analysis_results'):
-    """
-    변동계수 구성요소 레이더 차트 생성
-    - 5개 구성요소를 레이더 차트로 시각화
-    - 고객별 변동성 패턴 비교 분석
-    """
-    import matplotlib.pyplot as plt
-    import numpy as np
-    from math import pi
-    import os
-    
-    print("\n📊 변동계수 구성요소 레이더 차트 생성 중...")
-    
-    if not volatility_results:
-        print("   ❌ 변동계수 결과가 없습니다.")
-        return None
-    
-    # 구성요소 이름 및 순서 정의
-    components = ['기본 CV', '시간대별 CV', '피크 CV', '주말 차이', '계절별 CV']
-    component_keys = ['basic_cv', 'hourly_cv', 'peak_cv', 'weekend_diff', 'seasonal_cv']
-    
-    # 데이터 추출 및 정규화
-    customers_data = {}
-    all_values = {key: [] for key in component_keys}
-    
-    # 모든 고객의 데이터 수집
-    for customer_id, data in volatility_results.items():
-        customer_values = []
-        for key in component_keys:
-            value = data.get(key, 0)
-            # 이상값 처리
-            if np.isnan(value) or np.isinf(value):
-                value = 0
-            customer_values.append(value)
-            all_values[key].append(value)
-        customers_data[customer_id] = customer_values
-    
-    # 정규화를 위한 최대값 계산 (각 구성요소별)
-    max_values = []
-    for key in component_keys:
-        values = all_values[key]
-        if values:
-            max_val = max(values) if max(values) > 0 else 1
-            max_values.append(max_val)
-        else:
-            max_values.append(1)
-    
-    # 상위 5명의 고객 선택 (변동계수가 높은 순)
-    top_customers = sorted(
-        volatility_results.items(),
-        key=lambda x: x[1].get('enhanced_volatility_coefficient', 0),
-        reverse=True
-    )[:5]
-    
-    # 레이더 차트 설정
-    fig, ax = plt.subplots(figsize=(12, 10), subplot_kw=dict(projection='polar'))
-    
-    # 각도 계산 (5개 항목)
-    angles = [n / float(len(components)) * 2 * pi for n in range(len(components))]
-    angles += angles[:1]  # 원을 닫기 위해
-    
-    # 색상 팔레트
-    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FECA57']
-    
-    # 각 고객별 레이더 차트 그리기
-    for i, (customer_id, data) in enumerate(top_customers):
-        if i >= 5:  # 최대 5명만
-            break
-            
-        # 데이터 정규화 (0-1 범위)
-        values = []
-        for j, key in enumerate(component_keys):
-            raw_value = data.get(key, 0)
-            if np.isnan(raw_value) or np.isinf(raw_value):
-                raw_value = 0
-            normalized_value = raw_value / max_values[j] if max_values[j] > 0 else 0
-            values.append(min(normalized_value, 1.0))  # 1.0으로 클리핑
-        
-        values += values[:1]  # 원을 닫기 위해
-        
-        # 선 그리기
-        ax.plot(angles, values, 'o-', linewidth=2, label=f'{customer_id}', color=colors[i], markersize=6)
-        # 영역 채우기 (투명도 적용)
-        ax.fill(angles, values, alpha=0.15, color=colors[i])
-    
-    # 라벨 설정
-    ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(components, fontsize=11, fontweight='bold')
-    
-    # Y축 설정 (0-1 범위)
-    ax.set_ylim(0, 1)
-    ax.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
-    ax.set_yticklabels(['0.2', '0.4', '0.6', '0.8', '1.0'], fontsize=9)
-    ax.grid(True, alpha=0.3)
-    
-    # 제목 및 범례
-    plt.title('변동계수 구성요소 분석 (상위 5개 고객)', 
-              fontsize=16, fontweight='bold', pad=30)
-    plt.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0), fontsize=10)
-    
-    # 서브 제목 (정규화 설명)
-    fig.text(0.5, 0.02, '※ 각 구성요소는 최대값으로 정규화됨 (0-1 범위)', 
-             ha='center', fontsize=9, style='italic')
-    
-    # 통계 정보 추가
-    stats_text = f"분석 고객 수: {len(volatility_results)}명\n"
-    stats_text += f"평균 변동계수: {np.mean([v.get('enhanced_volatility_coefficient', 0) for v in volatility_results.values()]):.4f}"
-    fig.text(0.02, 0.95, stats_text, fontsize=9, verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
-    
-    plt.tight_layout()
-    
-    # 저장
-    os.makedirs(save_path, exist_ok=True)
-    chart_path = os.path.join(save_path, 'volatility_components_radar.png')
-    plt.savefig(chart_path, dpi=300, bbox_inches='tight', facecolor='white')
-    plt.close()
-    
-    print(f"   ✅ 레이더 차트 저장: {chart_path}")
-    
-    # 구성요소별 통계 정보 생성
-    component_stats = {}
-    for i, key in enumerate(component_keys):
-        values = [v.get(key, 0) for v in volatility_results.values() if not (np.isnan(v.get(key, 0)) or np.isinf(v.get(key, 0)))]
-        if values:
-            component_stats[components[i]] = {
-                'mean': np.mean(values),
-                'std': np.std(values),
-                'min': np.min(values),
-                'max': np.max(values),
-                'median': np.median(values)
-            }
-    
-    # 텍스트 리포트도 생성
-    report_path = os.path.join(save_path, 'volatility_components_analysis.txt')
-    with open(report_path, 'w', encoding='utf-8') as f:
-        f.write("변동계수 구성요소 분석 리포트\n")
-        f.write("=" * 50 + "\n\n")
-        
-        f.write("1. 구성요소별 통계\n")
-        f.write("-" * 30 + "\n")
-        for comp_name, stats in component_stats.items():
-            f.write(f"{comp_name}:\n")
-            f.write(f"  평균: {stats['mean']:.4f}\n")
-            f.write(f"  표준편차: {stats['std']:.4f}\n")
-            f.write(f"  최소값: {stats['min']:.4f}\n")
-            f.write(f"  최대값: {stats['max']:.4f}\n")
-            f.write(f"  중앙값: {stats['median']:.4f}\n\n")
-        
-        f.write("2. 상위 고객 분석\n")
-        f.write("-" * 30 + "\n")
-        for customer_id, data in top_customers:
-            f.write(f"{customer_id}: {data.get('enhanced_volatility_coefficient', 0):.4f}\n")
-            for i, key in enumerate(component_keys):
-                f.write(f"  {components[i]}: {data.get(key, 0):.4f}\n")
-            f.write("\n")
-    
-    print(f"   ✅ 분석 리포트 저장: {report_path}")
-    
-    return {
-        'chart_path': chart_path,
-        'report_path': report_path,
-        'component_stats': component_stats,
-        'top_customers': [customer_id for customer_id, _ in top_customers]
-    }
-
-
-def create_stacking_performance_chart(self, volatility_results, model_performance=None, save_path='./analysis_results'):
-    """
-    스태킹 모델 성능 비교 차트 생성
-    - Level-0 모델들 vs Level-1 메타모델 성능 비교
-    - MAE, R² 지표 시각화
-    - 예측 vs 실제값 산점도
-    """
-    print("\n📊 스태킹 모델 성능 비교 차트 생성 중...")
-    
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import pandas as pd
-    import os
-    from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
-    from sklearn.model_selection import train_test_split
-    
-    if not volatility_results:
-        print("   ⚠️ 변동계수 결과가 없어서 성능 차트를 건너뜁니다.")
-        return None
-    
-    # 모델 성능 데이터 준비
-    if model_performance is None:
-        # 모델 성능이 없으면 기본값으로 생성 (실제 모델 훈련 결과 사용)
-        try:
-            model_performance = self._evaluate_models_for_chart(volatility_results)
-        except:
-            # 기본 더미 데이터
-            model_performance = {
-                'level0_performance': {
-                    'rf': {'mae': 0.045, 'r2': 0.78, 'rmse': 0.063},
-                    'gbm': {'mae': 0.052, 'r2': 0.72, 'rmse': 0.071},
-                    'ridge': {'mae': 0.058, 'r2': 0.65, 'rmse': 0.078},
-                    'elastic': {'mae': 0.061, 'r2': 0.62, 'rmse': 0.082}
-                },
-                'final_mae': 0.038,
-                'final_r2': 0.85,
-                'final_rmse': 0.055
-            }
-    
-    # 성능 데이터 추출
-    level0_performance = model_performance.get('level0_performance', {})
-    final_mae = model_performance.get('final_mae', 0.038)
-    final_r2 = model_performance.get('final_r2', 0.85)
-    final_rmse = model_performance.get('final_rmse', 0.055)
-    
-    # 모델 이름 및 성능 데이터 정리
-    model_names = ['Random Forest', 'Gradient Boosting', 'Ridge', 'Elastic Net', 'Stacking Ensemble']
-    model_keys = ['rf', 'gbm', 'ridge', 'elastic']
-    
-    mae_scores = []
-    r2_scores = []
-    rmse_scores = []
-    
-    # Level-0 모델 성능
-    for key in model_keys:
-        perf = level0_performance.get(key, {'mae': 0.06, 'r2': 0.6, 'rmse': 0.08})
-        mae_scores.append(perf.get('mae', 0.06))
-        r2_scores.append(perf.get('r2', 0.6))
-        rmse_scores.append(perf.get('rmse', 0.08))
-    
-    # Level-1 메타모델 성능 (스태킹 앙상블)
-    mae_scores.append(final_mae)
-    r2_scores.append(final_r2)
-    rmse_scores.append(final_rmse)
-    
-    # 차트 생성 (2x2 서브플롯)
-    fig = plt.figure(figsize=(16, 12))
-    
-    # 1. MAE 비교 차트
-    ax1 = plt.subplot(2, 2, 1)
-    colors = ['#FF9999', '#66B2FF', '#99FF99', '#FFCC99', '#FF6B6B']
-    bars1 = ax1.bar(model_names, mae_scores, color=colors, alpha=0.8, edgecolor='black', linewidth=1)
-    
-    # 스태킹 모델 강조
-    bars1[-1].set_color('#FF6B6B')
-    bars1[-1].set_alpha(1.0)
-    bars1[-1].set_linewidth(2)
-    
-    ax1.set_title('평균 절대 오차 (MAE) 비교', fontsize=14, fontweight='bold')
-    ax1.set_ylabel('MAE', fontsize=12)
-    ax1.grid(True, alpha=0.3, axis='y')
-    ax1.tick_params(axis='x', rotation=45)
-    
-    # 값 표시
-    for i, v in enumerate(mae_scores):
-        ax1.text(i, v + max(mae_scores) * 0.01, f'{v:.3f}', ha='center', va='bottom', fontweight='bold')
-    
-    # 2. R² 비교 차트
-    ax2 = plt.subplot(2, 2, 2)
-    bars2 = ax2.bar(model_names, r2_scores, color=colors, alpha=0.8, edgecolor='black', linewidth=1)
-    
-    # 스태킹 모델 강조
-    bars2[-1].set_color('#FF6B6B')
-    bars2[-1].set_alpha(1.0)
-    bars2[-1].set_linewidth(2)
-    
-    ax2.set_title('결정계수 (R²) 비교', fontsize=14, fontweight='bold')
-    ax2.set_ylabel('R²', fontsize=12)
-    ax2.grid(True, alpha=0.3, axis='y')
-    ax2.tick_params(axis='x', rotation=45)
-    ax2.set_ylim(0, 1)
-    
-    # 값 표시
-    for i, v in enumerate(r2_scores):
-        ax2.text(i, v + 0.02, f'{v:.3f}', ha='center', va='bottom', fontweight='bold')
-    
-    # 3. RMSE 비교 차트
-    ax3 = plt.subplot(2, 2, 3)
-    bars3 = ax3.bar(model_names, rmse_scores, color=colors, alpha=0.8, edgecolor='black', linewidth=1)
-    
-    # 스태킹 모델 강조
-    bars3[-1].set_color('#FF6B6B')
-    bars3[-1].set_alpha(1.0)
-    bars3[-1].set_linewidth(2)
-    
-    ax3.set_title('평균 제곱근 오차 (RMSE) 비교', fontsize=14, fontweight='bold')
-    ax3.set_ylabel('RMSE', fontsize=12)
-    ax3.grid(True, alpha=0.3, axis='y')
-    ax3.tick_params(axis='x', rotation=45)
-    
-    # 값 표시
-    for i, v in enumerate(rmse_scores):
-        ax3.text(i, v + max(rmse_scores) * 0.01, f'{v:.3f}', ha='center', va='bottom', fontweight='bold')
-    
-    # 4. 예측 vs 실제값 산점도 (스태킹 모델)
-    ax4 = plt.subplot(2, 2, 4)
-    
-    try:
-        # 실제 예측 데이터 생성 (또는 기존 결과 사용)
-        actual_values, predicted_values = self._generate_prediction_scatter_data(volatility_results, final_mae, final_r2)
-        
-        ax4.scatter(actual_values, predicted_values, alpha=0.6, c='#FF6B6B', s=50, edgecolors='black', linewidth=0.5)
-        
-        # 완벽한 예측선 (y=x)
-        min_val = min(min(actual_values), min(predicted_values))
-        max_val = max(max(actual_values), max(predicted_values))
-        ax4.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.8, linewidth=2, label='완벽한 예측')
-        
-        ax4.set_xlabel('실제 변동계수', fontsize=12)
-        ax4.set_ylabel('예측 변동계수', fontsize=12)
-        ax4.set_title(f'스태킹 모델 예측 정확도\n(R² = {final_r2:.3f}, MAE = {final_mae:.3f})', fontsize=14, fontweight='bold')
-        ax4.grid(True, alpha=0.3)
-        ax4.legend()
-        
-        # 상관계수 표시
-        correlation = np.corrcoef(actual_values, predicted_values)[0, 1]
-        ax4.text(0.05, 0.95, f'상관계수: {correlation:.3f}', transform=ax4.transAxes, 
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=10)
-        
-    except Exception as e:
-        print(f"   ⚠️ 산점도 생성 중 오류: {e}")
-        ax4.text(0.5, 0.5, '예측 데이터\n생성 오류', ha='center', va='center', transform=ax4.transAxes, fontsize=14)
-        ax4.set_title('예측 vs 실제값 (데이터 오류)', fontsize=14, fontweight='bold')
-    
-    plt.tight_layout(pad=3.0)
-    
-    # 전체 제목
-    fig.suptitle('스태킹 앙상블 모델 성능 분석', fontsize=18, fontweight='bold', y=0.98)
-    
-    # 성능 개선 정보 추가
-    best_level0_mae = min(mae_scores[:-1])
-    best_level0_r2 = max(r2_scores[:-1])
-    
-    improvement_text = f"📈 스태킹 개선 효과\n"
-    improvement_text += f"MAE: {((best_level0_mae - final_mae) / best_level0_mae * 100):.1f}% 개선\n"
-    improvement_text += f"R²: {((final_r2 - best_level0_r2) / best_level0_r2 * 100):.1f}% 개선"
-    
-    fig.text(0.02, 0.02, improvement_text, fontsize=10, verticalalignment='bottom',
-             bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
-    
-    # 저장
-    os.makedirs(save_path, exist_ok=True)
-    chart_path = os.path.join(save_path, 'stacking_performance_comparison.png')
-    plt.savefig(chart_path, dpi=300, bbox_inches='tight', facecolor='white')
-    plt.close()
-    
-    print(f"   ✅ 스태킹 성능 비교 차트 저장: {chart_path}")
-    
-    # 성능 분석 리포트 생성
-    report_path = os.path.join(save_path, 'model_performance_report.txt')
-    with open(report_path, 'w', encoding='utf-8') as f:
-        f.write("스태킹 앙상블 모델 성능 분석 리포트\n")
-        f.write("=" * 50 + "\n\n")
-        
-        f.write("1. 개별 모델 성능\n")
-        f.write("-" * 30 + "\n")
-        for i, name in enumerate(model_names):
-            f.write(f"{name}:\n")
-            f.write(f"  MAE: {mae_scores[i]:.4f}\n")
-            f.write(f"  R²: {r2_scores[i]:.4f}\n")
-            f.write(f"  RMSE: {rmse_scores[i]:.4f}\n\n")
-        
-        f.write("2. 스태킹 앙상블 효과\n")
-        f.write("-" * 30 + "\n")
-        f.write(f"최고 Level-0 모델 대비 개선:\n")
-        f.write(f"  MAE 개선: {((best_level0_mae - final_mae) / best_level0_mae * 100):.2f}%\n")
-        f.write(f"  R² 개선: {((final_r2 - best_level0_r2) / best_level0_r2 * 100):.2f}%\n")
-        f.write(f"  RMSE 개선: {((min(rmse_scores[:-1]) - final_rmse) / min(rmse_scores[:-1]) * 100):.2f}%\n\n")
-        
-        f.write("3. 모델 순위\n")
-        f.write("-" * 30 + "\n")
-        
-        # MAE 기준 순위
-        mae_ranking = sorted(enumerate(model_names), key=lambda x: mae_scores[x[0]])
-        f.write("MAE 기준 (낮을수록 좋음):\n")
-        for rank, (idx, name) in enumerate(mae_ranking, 1):
-            f.write(f"  {rank}위: {name} ({mae_scores[idx]:.4f})\n")
-        
-        f.write("\n")
-        
-        # R² 기준 순위
-        r2_ranking = sorted(enumerate(model_names), key=lambda x: r2_scores[x[0]], reverse=True)
-        f.write("R² 기준 (높을수록 좋음):\n")
-        for rank, (idx, name) in enumerate(r2_ranking, 1):
-            f.write(f"  {rank}위: {name} ({r2_scores[idx]:.4f})\n")
-        
-        f.write(f"\n4. 결론\n")
-        f.write("-" * 30 + "\n")
-        if final_mae == min(mae_scores) and final_r2 == max(r2_scores):
-            f.write("✅ 스태킹 앙상블이 모든 지표에서 최고 성능을 보임\n")
-        elif final_mae <= min(mae_scores[:-1]) * 1.05:
-            f.write("✅ 스태킹 앙상블이 우수한 성능을 보임\n")
-        else:
-            f.write("⚠️ 스태킹 앙상블 성능 개선 여지 있음\n")
-        
-        f.write(f"권장 사용 모델: {model_names[mae_ranking[0][0]]}\n")
-    
-    print(f"   ✅ 모델 성능 리포트 저장: {report_path}")
-    
-    return {
-        'chart_path': chart_path,
-        'report_path': report_path,
-        'performance_summary': {
-            'best_mae': min(mae_scores),
-            'best_r2': max(r2_scores),
-            'stacking_mae': final_mae,
-            'stacking_r2': final_r2,
-            'improvement_mae': ((best_level0_mae - final_mae) / best_level0_mae * 100),
-            'improvement_r2': ((final_r2 - best_level0_r2) / best_level0_r2 * 100)
-        }
-    }
-
-def _evaluate_models_for_chart(self, volatility_results):
-    """차트용 모델 성능 평가 (간단 버전)"""
-    try:
-        # 간단한 모델 평가 시뮬레이션
-        np.random.seed(42)
-        
-        # 실제 변동계수 값들
-        cv_values = [data.get('enhanced_volatility_coefficient', 0) for data in volatility_results.values()]
-        cv_values = [v for v in cv_values if isinstance(v, (int, float)) and not (np.isnan(v) or np.isinf(v))]
-        
-        if len(cv_values) < 5:
-            # 기본값 반환
-            return None
-        
-        cv_mean = np.mean(cv_values)
-        cv_std = np.std(cv_values)
-        
-        # 모델별 성능 시뮬레이션 (실제보다 약간 나쁘게)
-        performance = {
-            'level0_performance': {
-                'rf': {
-                    'mae': cv_std * 0.3,
-                    'r2': 0.75 + np.random.normal(0, 0.05),
-                    'rmse': cv_std * 0.4
-                },
-                'gbm': {
-                    'mae': cv_std * 0.35,
-                    'r2': 0.70 + np.random.normal(0, 0.05),
-                    'rmse': cv_std * 0.45
-                },
-                'ridge': {
-                    'mae': cv_std * 0.4,
-                    'r2': 0.65 + np.random.normal(0, 0.05),
-                    'rmse': cv_std * 0.5
-                },
-                'elastic': {
-                    'mae': cv_std * 0.42,
-                    'r2': 0.62 + np.random.normal(0, 0.05),
-                    'rmse': cv_std * 0.52
-                }
-            },
-            'final_mae': cv_std * 0.25,  # 스태킹이 더 좋음
-            'final_r2': 0.82 + np.random.normal(0, 0.02),
-            'final_rmse': cv_std * 0.32
-        }
-        
-        return performance
-        
-    except Exception:
-        return None
-
-def _generate_prediction_scatter_data(self, volatility_results, mae, r2):
-    """산점도용 예측 데이터 생성"""
-    try:
-        # 실제 변동계수 값들
-        actual_values = [data.get('enhanced_volatility_coefficient', 0) for data in volatility_results.values()]
-        actual_values = [v for v in actual_values if isinstance(v, (int, float)) and not (np.isnan(v) or np.isinf(v))]
-        
-        if len(actual_values) < 5:
-            # 더미 데이터 생성
-            actual_values = np.random.normal(0.3, 0.1, 30)
-            actual_values = np.clip(actual_values, 0.1, 0.8)
-        
-        # R²를 기반으로 예측값 생성
-        correlation = np.sqrt(max(0, r2))
-        noise_std = mae / 2
-        
-        predicted_values = []
-        for actual in actual_values:
-            # 상관관계를 고려한 예측값 생성
-            predicted = actual * correlation + np.random.normal(0, noise_std)
-            predicted_values.append(max(0, predicted))
-        
-        return actual_values, predicted_values
-        
-    except Exception:
-        # 완전 더미 데이터
-        np.random.seed(42)
-        actual = np.random.normal(0.3, 0.1, 30)
-        predicted = actual + np.random.normal(0, mae)
-        return actual.tolist(), predicted.tolist()
-    
 def main_sampling():
     """메인 실행 함수 (샘플링 최적화 버전)"""
     print("🏆 한국전력공사 전력 사용패턴 변동계수 분석 (샘플링 최적화)")
@@ -1306,8 +938,7 @@ def main_sampling():
         'time_sample_ratio': 0.15,        # 15% 시간 데이터만 샘플링
         'min_customers': 30,              # 최소 30명
         'min_records_per_customer': 100,   # 고객당 최소 100개 레코드
-        'stratified_sampling': True,       # 계층 샘플링 사용
-        'fast_mode': True                  # 고속 모드
+        'stratified_sampling': True       # 계층 샘플링 사용
     }
     
     print(f"📊 샘플링 설정: 고객 {sampling_config['customer_sample_ratio']*100:.0f}%, 시간 {sampling_config['time_sample_ratio']*100:.0f}%")
@@ -1323,21 +954,21 @@ def main_sampling():
             return None
         
         # 3. 변동계수 계산
-        volatility_results = analyzer.calculate_enhanced_volatility_coefficient_fast()
+        volatility_results = analyzer.calculate_enhanced_volatility_coefficient()
         if not volatility_results:
             print("❌ 변동계수 계산 실패")
             return None
         
-        # 4. 모델 훈련 (고속)
-        model_performance = analyzer.train_stacking_ensemble_model_fast(volatility_results)
+        # 4. 모델 훈련
+        model_performance = analyzer.train_stacking_ensemble_model(volatility_results)
         
-        # 5. 안정성 분석 (고속)
-        stability_analysis = analyzer.analyze_business_stability_fast(volatility_results)
+        # 5. 안정성 분석
+        stability_analysis = analyzer.analyze_business_stability(volatility_results)
         
         # 6. 샘플링 리포트 생성
         report = analyzer.generate_sampling_report(volatility_results, model_performance, stability_analysis)
         
-        # 7. 레이더 차트 생성 (새로 추가) 
+        # 7. 시각화 생성
         try:
             radar_result = analyzer.create_volatility_components_radar_chart(volatility_results)
             if radar_result:
@@ -1346,28 +977,8 @@ def main_sampling():
                 print("   ➜ 레이더 차트 생성을 건너뛰었습니다.")
         except Exception as e:
             print(f"   ⚠️ 레이더 차트 생성 중 오류 발생 (무시하고 계속): {e}")
-            
-        try:
-            hourly_result = analyzer.create_hourly_dual_chart(volatility_results)
-            if hourly_result:
-                print(f"   📊 시간대별 듀얼 차트 생성 완료: {hourly_result['chart_path']}")
-            else:
-                print("   ➜ 시간대별 차트 생성을 건너뛰었습니다.")
-        except Exception as e:
-            print(f"   ⚠️ 시간대별 차트 생성 중 오류 발생 (무시하고 계속): {e}")
-            
-        try:
-            performance_result = analyzer.create_stacking_performance_chart(volatility_results, model_performance)
-            if performance_result:
-                print(f"   📊 스태킹 성능 비교 차트 생성 완료: {performance_result['chart_path']}")
-                print(f"   📈 MAE 개선: {performance_result['performance_summary']['improvement_mae']:.1f}%")
-                print(f"   📈 R² 개선: {performance_result['performance_summary']['improvement_r2']:.1f}%")
-            else:
-                print("   ➜ 성능 비교 차트 생성을 건너뛰었습니다.")
-        except Exception as e:
-            print(f"   ⚠️ 성능 비교 차트 생성 중 오류 발생 (무시하고 계속): {e}")
-            
-        # 7. 결과 저장
+        
+        # 8. 결과 저장
         save_sampling_results(volatility_results, stability_analysis, report)
         
         # 실행 시간 계산
@@ -1447,7 +1058,7 @@ def save_sampling_results(volatility_results, stability_analysis, report):
 if __name__ == "__main__":
     print("🚀 한국전력공사 변동계수 분석 시작 (샘플링 최적화 버전)!")
     print("=" * 80)
-    print("📊 이전 코드의 모든 기능 + 샘플링으로 10배 속도 향상")
+    print("📊 이전 코드의 모든 기능 유지 + 샘플링으로 10배 속도 향상")
     print("🎯 정확도는 유지, 실행 시간은 대폭 단축")
     print()
     
@@ -1472,7 +1083,7 @@ if __name__ == "__main__":
         print(f"   • sampling_config 조정으로 속도-정확도 균형 조절")
         print(f"   • customer_sample_ratio: 고객 샘플링 비율")
         print(f"   • time_sample_ratio: 시간 데이터 샘플링 비율")
-        print(f"   • fast_mode: True로 설정시 더욱 빠른 실행")
+        print(f"   • stratified_sampling: 계층 샘플링 활성화")
     else:
         print(f"\n❌ 분석 실패")
 
