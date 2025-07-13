@@ -99,14 +99,15 @@ class KEPCOVolatilityAnalyzer:
                     self.lp_data = pd.read_csv(csv_path)
                     loading_method = "CSV"
                 else:
-                    print(f"   ❌ LP 데이터를 찾을 수 없습니다.")
-                    return False
+                    raise FileNotFoundError("LP 데이터 파일을 찾을 수 없습니다. 'processed_lp_data.h5' 또는 'processed_lp_data.csv' 파일이 필요합니다.")
         elif os.path.exists(csv_path):
             self.lp_data = pd.read_csv(csv_path)
             loading_method = "CSV"
         else:
-            print(f"   ❌ 전처리된 LP 데이터가 없습니다.")
-            return False
+            raise FileNotFoundError("전처리된 LP 데이터가 없습니다. 데이터 전처리를 먼저 실행해주세요.")
+        
+        if len(self.lp_data) < 10000:
+            raise ValueError(f"데이터가 너무 적습니다. 현재 {len(self.lp_data):,}건, 최소 10,000건 필요합니다.")
         
         original_size = len(self.lp_data)
         print(f"   📁 원본 데이터: {original_size:,}건 ({loading_method})")
@@ -119,6 +120,9 @@ class KEPCOVolatilityAnalyzer:
         
         sampled_size = len(self.lp_data)
         reduction_ratio = (1 - sampled_size/original_size) * 100
+        
+        if sampled_size < 5000:
+            raise ValueError(f"샘플링 후 데이터가 너무 적습니다. 현재 {sampled_size:,}건, 최소 5,000건 필요합니다.")
         
         print(f"   ✂️ 샘플링 후: {sampled_size:,}건")
         print(f"   📉 데이터 감소: {reduction_ratio:.1f}%")
@@ -380,12 +384,8 @@ class KEPCOVolatilityAnalyzer:
         
         print(f"   ✅ {processed_count}명 변동성 지표 계산 완료")
         
-        # 가중치 최적화 (정확도 우선 - 충분한 최적화)
-        if len(volatility_components) >= 20:
-            optimal_weights = self.optimize_volatility_weights_accurate(volatility_components)
-        else:
-            optimal_weights = [0.35, 0.25, 0.20, 0.10, 0.10]  # 기본 가중치
-            print(f"   ⚠️ 데이터 부족으로 기본 가중치 사용")
+        # 가중치 최적화 (필수)
+        optimal_weights = self.optimize_volatility_weights_accurate(volatility_components)
         
         print(f"   🎯 최종 가중치: {[round(w, 3) for w in optimal_weights]}")
         
@@ -519,14 +519,16 @@ class KEPCOVolatilityAnalyzer:
             return None
     
     def optimize_volatility_weights_accurate(self, volatility_components):
-        """가중치 최적화 (정확도 우선)"""
-        print("\n⚙️ 가중치 최적화 중 (정확도 우선)...")
+        """가중치 최적화 (필수)"""
+        print("\n⚙️ 가중치 최적화 중...")
         
         try:
             from scipy.optimize import minimize, differential_evolution
         except ImportError:
-            print("   ⚠️ scipy가 설치되지 않아 기본 가중치 사용")
-            return [0.35, 0.25, 0.20, 0.10, 0.10]
+            raise ImportError("scipy가 설치되지 않았습니다. 'pip install scipy'로 설치해주세요.")
+        
+        if len(volatility_components) < 30:
+            raise ValueError(f"가중치 최적화를 위한 데이터가 부족합니다. 현재 {len(volatility_components)}개, 최소 30개 필요합니다.")
         
         components_df = pd.DataFrame(volatility_components)
         
@@ -603,20 +605,22 @@ class KEPCOVolatilityAnalyzer:
         except:
             pass
         
-        if best_result and best_result.success:
-            optimal_weights = best_result.x
-            # 가중치 정규화 (합이 정확히 1이 되도록)
-            optimal_weights = optimal_weights / np.sum(optimal_weights)
-            print(f"   ✅ 가중치 최적화 완료 (목적함수값: {best_score:.4f})")
-            
-            # 최적화 품질 검증
-            r2_score_weights = self._validate_weight_optimization(X_scaled, y_scaled, optimal_weights)
-            print(f"   📊 가중치 최적화 R²: {r2_score_weights:.4f}")
-            
-            return optimal_weights.tolist()
-        else:
-            print("   ⚠️ 최적화 실패, 기본 가중치 사용")
-            return [0.35, 0.25, 0.20, 0.10, 0.10]
+        if not best_result or not best_result.success:
+            raise RuntimeError("가중치 최적화에 실패했습니다. 데이터나 초기값을 확인해주세요.")
+        
+        optimal_weights = best_result.x
+        # 가중치 정규화 (합이 정확히 1이 되도록)
+        optimal_weights = optimal_weights / np.sum(optimal_weights)
+        print(f"   ✅ 가중치 최적화 완료 (목적함수값: {best_score:.4f})")
+        
+        # 최적화 품질 검증
+        r2_score_weights = self._validate_weight_optimization(X_scaled, y_scaled, optimal_weights)
+        print(f"   📊 가중치 최적화 R²: {r2_score_weights:.4f}")
+        
+        if r2_score_weights < 0.3:
+            raise ValueError(f"가중치 최적화 품질이 너무 낮습니다 (R²={r2_score_weights:.4f}). 데이터 품질을 확인해주세요.")
+        
+        return optimal_weights.tolist()
     
     def _validate_weight_optimization(self, X_scaled, y_scaled, weights):
         """가중치 최적화 검증"""
@@ -630,9 +634,8 @@ class KEPCOVolatilityAnalyzer:
         """스태킹 앙상블 모델 훈련 (정확도 우선)"""
         print("\n🎯 스태킹 앙상블 모델 훈련 중 (정확도 우선)...")
         
-        if len(volatility_results) < 20:
-            print("   ❌ 훈련 데이터가 부족합니다 (최소 20개 필요)")
-            return None
+        if len(volatility_results) < 50:
+            raise ValueError(f"모델 훈련을 위한 데이터가 부족합니다. 현재 {len(volatility_results)}개, 최소 50개 필요합니다.")
         
         # 특성 추출 (더 많은 특성 포함)
         features = []
@@ -658,8 +661,10 @@ class KEPCOVolatilityAnalyzer:
                 targets.append(data['enhanced_volatility_coefficient'])
                 
             except KeyError as e:
-                print(f"   ⚠️ 특성 추출 실패: {e}")
-                continue
+                raise KeyError(f"필수 특성이 누락되었습니다: {e}")
+        
+        if len(features) < 30:
+            raise ValueError(f"유효한 특성 벡터가 부족합니다. 현재 {len(features)}개, 최소 30개 필요합니다.")
         
         X = np.array(features)
         y = np.array(targets)
@@ -796,18 +801,25 @@ class KEPCOVolatilityAnalyzer:
         if best_meta_model is not None:
             self.meta_model = best_meta_model
             
-            print(f"   ✅ 스태킹 앙상블 훈련 완료")
-            print(f"      최고 메타모델: {final_performance['meta_model_name']}")
-            print(f"      최종 MAE: {final_performance['final_mae']:.4f}")
-            print(f"      최종 R²: {final_performance['final_r2']:.4f}")
-            print(f"      최종 RMSE: {final_performance['final_rmse']:.4f}")
+            # 성능 검증
+            if final_performance['final_r2'] < 0.5:
+                raise ValueError(f"모델 성능이 너무 낮습니다 (R²={final_performance['final_r2']:.4f}). 최소 0.5 이상 필요합니다.")
             
             # 과적합 검사
             train_pred = self.meta_model.predict(meta_features_train)
             train_r2 = r2_score(y_train, train_pred)
             overfitting_gap = train_r2 - final_performance['final_r2']
             
+            if overfitting_gap > 0.2:
+                raise Warning(f"심각한 과적합이 감지되었습니다 (차이={overfitting_gap:.4f}). 모델을 재검토해주세요.")
+            
+            print(f"   ✅ 스태킹 앙상블 훈련 완료")
+            print(f"      최고 메타모델: {final_performance['meta_model_name']}")
+            print(f"      최종 MAE: {final_performance['final_mae']:.4f}")
+            print(f"      최종 R²: {final_performance['final_r2']:.4f}")
+            print(f"      최종 RMSE: {final_performance['final_rmse']:.4f}")
             print(f"      과적합 점검: 훈련 R²={train_r2:.4f}, 차이={overfitting_gap:.4f}")
+            
             if overfitting_gap > 0.1:
                 print(f"      ⚠️ 과적합 의심 (차이 > 0.1)")
             else:
@@ -823,15 +835,17 @@ class KEPCOVolatilityAnalyzer:
                 'accuracy_optimized': True
             }
         else:
-            print("   ❌ 모든 메타모델 훈련 실패")
-            return None
+            raise RuntimeError("모든 메타모델 훈련에 실패했습니다. 데이터나 모델 설정을 확인해주세요.")
 
     def analyze_business_stability_accurate(self, volatility_results):
-        """영업활동 안정성 분석 (정확도 우선)"""
-        print("\n🔍 영업활동 안정성 분석 중 (정확도 우선)...")
+        """영업활동 안정성 분석 (필수)"""
+        print("\n🔍 영업활동 안정성 분석 중...")
         
         if not volatility_results:
-            return {}
+            raise ValueError("안정성 분석을 위한 변동계수 결과가 없습니다.")
+        
+        if len(volatility_results) < 10:
+            raise ValueError(f"안정성 분석을 위한 데이터가 부족합니다. 현재 {len(volatility_results)}개, 최소 10개 필요합니다.")
         
         coefficients = [v['enhanced_volatility_coefficient'] for v in volatility_results.values()]
         stability_scores = [v['stability_score'] for v in volatility_results.values()]
@@ -978,8 +992,17 @@ class KEPCOVolatilityAnalyzer:
             return '낮음'
 
     def generate_comprehensive_report(self, volatility_results, model_performance, stability_analysis):
-        """종합 분석 리포트 생성 (정확도 우선)"""
+        """종합 분석 리포트 생성 (필수)"""
         print("\n📋 종합 분석 리포트 생성 중...")
+        
+        if not volatility_results:
+            raise ValueError("리포트 생성을 위한 변동계수 결과가 없습니다.")
+        
+        if not model_performance:
+            raise ValueError("리포트 생성을 위한 모델 성능 결과가 없습니다.")
+        
+        if not stability_analysis:
+            raise ValueError("리포트 생성을 위한 안정성 분석 결과가 없습니다.")
         
         coefficients = [v['enhanced_volatility_coefficient'] for v in volatility_results.values()] if volatility_results else []
         
@@ -1213,35 +1236,53 @@ class KEPCOVolatilityAnalyzer:
     def _assess_data_sufficiency(self, volatility_results):
         """데이터 충분성 평가"""
         if not volatility_results:
-            return False
+            raise ValueError("데이터 충분성 평가를 위한 결과가 없습니다.")
         
         total_customers = len(volatility_results)
         avg_data_points = np.mean([v['data_points'] for v in volatility_results.values()])
         
-        return (total_customers >= 50 and 
-                avg_data_points >= self.sampling_config['min_records_per_customer'])
+        if total_customers < 50:
+            raise ValueError(f"분석 고객 수가 부족합니다. 현재 {total_customers}명, 최소 50명 필요합니다.")
+        
+        if avg_data_points < self.sampling_config['min_records_per_customer']:
+            raise ValueError(f"고객당 평균 데이터 포인트가 부족합니다. 현재 {avg_data_points:.0f}개, 최소 {self.sampling_config['min_records_per_customer']}개 필요합니다.")
+        
+        return True
     
     def _check_statistical_significance(self, coefficients):
         """통계적 유의성 확인"""
         if len(coefficients) < 30:
-            return False
+            raise ValueError(f"통계적 유의성 검증을 위한 데이터가 부족합니다. 현재 {len(coefficients)}개, 최소 30개 필요합니다.")
         
         # 정규성 검정 (간단한 방법)
         mean_cv = np.mean(coefficients)
         std_cv = np.std(coefficients)
         
         # 변동계수가 의미있는 분포를 가지는지 확인
-        return std_cv > 0.01 and len(set(np.round(coefficients, 3))) > len(coefficients) * 0.5
+        if std_cv <= 0.01:
+            raise ValueError(f"변동계수의 표준편차가 너무 작습니다 ({std_cv:.4f}). 데이터의 다양성이 부족합니다.")
+        
+        unique_ratio = len(set(np.round(coefficients, 3))) / len(coefficients)
+        if unique_ratio < 0.5:
+            raise ValueError(f"변동계수의 고유값 비율이 너무 낮습니다 ({unique_ratio:.2f}). 데이터가 너무 균일합니다.")
+        
+        return True
     
     def _evaluate_algorithm_robustness(self, model_performance):
         """알고리즘 견고성 평가"""
         if not model_performance:
-            return False
+            raise ValueError("알고리즘 견고성 평가를 위한 모델 성능 결과가 없습니다.")
         
         r2_score = model_performance.get('final_r2', 0)
         overfitting_gap = model_performance.get('overfitting_gap', 1)
         
-        return r2_score > 0.6 and overfitting_gap < 0.15
+        if r2_score < 0.6:
+            raise ValueError(f"모델 예측 성능이 기준 미달입니다 (R²={r2_score:.4f}). 최소 0.6 이상 필요합니다.")
+        
+        if overfitting_gap > 0.15:
+            raise ValueError(f"과적합이 심각합니다 (차이={overfitting_gap:.4f}). 모델을 재검토해주세요.")
+        
+        return True
     
     def _calculate_overall_confidence(self, volatility_results, model_performance):
         """전체 신뢰도 계산"""
