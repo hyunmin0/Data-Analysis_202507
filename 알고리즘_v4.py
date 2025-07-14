@@ -659,49 +659,25 @@ class KEPCOSamplingVolatilityAnalyzer:
             return None
 
     def create_stacking_performance_chart(self, volatility_results, model_performance=None, save_path='./analysis_results'):
-        """
-        스태킹 모델 성능 비교 차트 생성
-        - Level-0 모델들 vs Level-1 메타모델 성능 비교
-        - MAE, R² 지표 시각화
-        - 예측 vs 실제값 산점도
-        """
-        print("\n📊 스태킹 모델 성능 비교 차트 생성 중...")
-        
+        """실제 모델 기반 스태킹 모델 성능 비교 차트 생성"""
         import matplotlib.pyplot as plt
         import numpy as np
-        import pandas as pd
         import os
-        from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
-        from sklearn.model_selection import train_test_split
         
         if not volatility_results:
-            print("   ⚠️ 변동계수 결과가 없어서 성능 차트를 건너뜁니다.")
             return None
         
-        # 모델 성능 데이터 준비
-        if model_performance is None:
-            # 모델 성능이 없으면 기본값으로 생성 (실제 모델 훈련 결과 사용)
-            try:
-                model_performance = self._evaluate_models_for_chart(volatility_results)
-            except:
-                # 기본 더미 데이터
-                model_performance = {
-                    'level0_performance': {
-                        'rf': {'mae': 0.045, 'r2': 0.78, 'rmse': 0.063},
-                        'gbm': {'mae': 0.052, 'r2': 0.72, 'rmse': 0.071},
-                        'ridge': {'mae': 0.058, 'r2': 0.65, 'rmse': 0.078},
-                        'elastic': {'mae': 0.061, 'r2': 0.62, 'rmse': 0.082}
-                    },
-                    'final_mae': 0.038,
-                    'final_r2': 0.85,
-                    'final_rmse': 0.055
-                }
+        # 실제 모델 성능 평가
+        model_performance = self._evaluate_models_for_chart(volatility_results)
+        
+        if not model_performance:
+            return None
         
         # 성능 데이터 추출
         level0_performance = model_performance.get('level0_performance', {})
-        final_mae = model_performance.get('final_mae', 0.038)
-        final_r2 = model_performance.get('final_r2', 0.85)
-        final_rmse = model_performance.get('final_rmse', 0.055)
+        final_mae = model_performance.get('final_mae', 0)
+        final_r2 = model_performance.get('final_r2', 0)
+        final_rmse = model_performance.get('final_rmse', 0)
         
         # 모델 이름 및 성능 데이터 정리
         model_names = ['Random Forest', 'Gradient Boosting', 'Ridge', 'Elastic Net', 'Stacking Ensemble']
@@ -711,27 +687,23 @@ class KEPCOSamplingVolatilityAnalyzer:
         r2_scores = []
         rmse_scores = []
         
-        # Level-0 모델 성능
         for key in model_keys:
-            perf = level0_performance.get(key, {'mae': 0.06, 'r2': 0.6, 'rmse': 0.08})
-            mae_scores.append(perf.get('mae', 0.06))
-            r2_scores.append(perf.get('r2', 0.6))
-            rmse_scores.append(perf.get('rmse', 0.08))
+            perf = level0_performance.get(key, {'mae': 0, 'r2': 0, 'rmse': 0})
+            mae_scores.append(perf.get('mae', 0))
+            r2_scores.append(perf.get('r2', 0))
+            rmse_scores.append(perf.get('rmse', 0))
         
-        # Level-1 메타모델 성능 (스태킹 앙상블)
         mae_scores.append(final_mae)
         r2_scores.append(final_r2)
         rmse_scores.append(final_rmse)
         
-        # 차트 생성 (2x2 서브플롯)
+        # 차트 생성
         fig = plt.figure(figsize=(16, 12))
         
-        # 1. MAE 비교 차트
+        # MAE 차트
         ax1 = plt.subplot(2, 2, 1)
         colors = ['#FF9999', '#66B2FF', '#99FF99', '#FFCC99', '#FF6B6B']
         bars1 = ax1.bar(model_names, mae_scores, color=colors, alpha=0.8, edgecolor='black', linewidth=1)
-        
-        # 스태킹 모델 강조
         bars1[-1].set_color('#FF6B6B')
         bars1[-1].set_alpha(1.0)
         bars1[-1].set_linewidth(2)
@@ -741,15 +713,12 @@ class KEPCOSamplingVolatilityAnalyzer:
         ax1.grid(True, alpha=0.3, axis='y')
         ax1.tick_params(axis='x', rotation=45)
         
-        # 값 표시
         for i, v in enumerate(mae_scores):
             ax1.text(i, v + max(mae_scores) * 0.01, f'{v:.3f}', ha='center', va='bottom', fontweight='bold')
         
-        # 2. R² 비교 차트
+        # R² 차트
         ax2 = plt.subplot(2, 2, 2)
         bars2 = ax2.bar(model_names, r2_scores, color=colors, alpha=0.8, edgecolor='black', linewidth=1)
-        
-        # 스태킹 모델 강조
         bars2[-1].set_color('#FF6B6B')
         bars2[-1].set_alpha(1.0)
         bars2[-1].set_linewidth(2)
@@ -760,15 +729,12 @@ class KEPCOSamplingVolatilityAnalyzer:
         ax2.tick_params(axis='x', rotation=45)
         ax2.set_ylim(0, 1)
         
-        # 값 표시
         for i, v in enumerate(r2_scores):
             ax2.text(i, v + 0.02, f'{v:.3f}', ha='center', va='bottom', fontweight='bold')
         
-        # 3. RMSE 비교 차트
+        # RMSE 차트
         ax3 = plt.subplot(2, 2, 3)
         bars3 = ax3.bar(model_names, rmse_scores, color=colors, alpha=0.8, edgecolor='black', linewidth=1)
-        
-        # 스태킹 모델 강조
         bars3[-1].set_color('#FF6B6B')
         bars3[-1].set_alpha(1.0)
         bars3[-1].set_linewidth(2)
@@ -778,63 +744,55 @@ class KEPCOSamplingVolatilityAnalyzer:
         ax3.grid(True, alpha=0.3, axis='y')
         ax3.tick_params(axis='x', rotation=45)
         
-        # 값 표시
         for i, v in enumerate(rmse_scores):
             ax3.text(i, v + max(rmse_scores) * 0.01, f'{v:.3f}', ha='center', va='bottom', fontweight='bold')
         
-        # 4. 예측 vs 실제값 산점도 (스태킹 모델)
+        # 예측 vs 실제값 산점도
         ax4 = plt.subplot(2, 2, 4)
         
-        try:
-            # 실제 예측 데이터 생성 (또는 기존 결과 사용)
-            actual_values, predicted_values = self._generate_prediction_scatter_data(volatility_results, final_mae, final_r2)
+        if 'test_actual' in model_performance and 'test_predicted' in model_performance:
+            actual_values = model_performance['test_actual']
+            predicted_values = model_performance['test_predicted']
             
             ax4.scatter(actual_values, predicted_values, alpha=0.6, c='#FF6B6B', s=50, edgecolors='black', linewidth=0.5)
             
-            # 완벽한 예측선 (y=x)
             min_val = min(min(actual_values), min(predicted_values))
             max_val = max(max(actual_values), max(predicted_values))
             ax4.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.8, linewidth=2, label='완벽한 예측')
             
-            ax4.set_xlabel('실제 변동계수', fontsize=12)
-            ax4.set_ylabel('예측 변동계수', fontsize=12)
-            ax4.set_title(f'스태킹 모델 예측 정확도\n(R² = {final_r2:.3f}, MAE = {final_mae:.3f})', fontsize=14, fontweight='bold')
-            ax4.grid(True, alpha=0.3)
-            ax4.legend()
-            
-            # 상관계수 표시
             correlation = np.corrcoef(actual_values, predicted_values)[0, 1]
             ax4.text(0.05, 0.95, f'상관계수: {correlation:.3f}', transform=ax4.transAxes, 
                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=10)
-            
-        except Exception as e:
-            print(f"   ⚠️ 산점도 생성 중 오류: {e}")
-            ax4.text(0.5, 0.5, '예측 데이터\n생성 오류', ha='center', va='center', transform=ax4.transAxes, fontsize=14)
-            ax4.set_title('예측 vs 실제값 (데이터 오류)', fontsize=14, fontweight='bold')
+        else:
+            ax4.text(0.5, 0.5, '예측 데이터\n부족', ha='center', va='center', transform=ax4.transAxes, fontsize=14)
+        
+        ax4.set_xlabel('실제 변동계수', fontsize=12)
+        ax4.set_ylabel('예측 변동계수', fontsize=12)
+        ax4.set_title(f'스태킹 모델 예측 정확도\n(R² = {final_r2:.3f}, MAE = {final_mae:.3f})', fontsize=14, fontweight='bold')
+        ax4.grid(True, alpha=0.3)
+        ax4.legend()
         
         plt.tight_layout(pad=3.0)
-        
-        # 전체 제목
         fig.suptitle('스태킹 앙상블 모델 성능 분석', fontsize=18, fontweight='bold', y=0.98)
         
-        # 성능 개선 정보 추가
-        best_level0_mae = min(mae_scores[:-1])
-        best_level0_r2 = max(r2_scores[:-1])
-        
-        improvement_text = f"📈 스태킹 개선 효과\n"
-        improvement_text += f"MAE: {((best_level0_mae - final_mae) / best_level0_mae * 100):.1f}% 개선\n"
-        improvement_text += f"R²: {((final_r2 - best_level0_r2) / best_level0_r2 * 100):.1f}% 개선"
-        
-        fig.text(0.02, 0.02, improvement_text, fontsize=10, verticalalignment='bottom',
-                 bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
+        # 성능 개선 정보
+        if len(mae_scores) > 1:
+            best_level0_mae = min(mae_scores[:-1]) if mae_scores[:-1] else mae_scores[-1]
+            best_level0_r2 = max(r2_scores[:-1]) if r2_scores[:-1] else r2_scores[-1]
+            
+            if best_level0_mae > 0 and best_level0_r2 > 0:
+                improvement_text = f"📈 스태킹 개선 효과\n"
+                improvement_text += f"MAE: {((best_level0_mae - final_mae) / best_level0_mae * 100):.1f}% 개선\n"
+                improvement_text += f"R²: {((final_r2 - best_level0_r2) / best_level0_r2 * 100):.1f}% 개선"
+                
+                fig.text(0.02, 0.02, improvement_text, fontsize=10, verticalalignment='bottom',
+                         bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
         
         # 저장
         os.makedirs(save_path, exist_ok=True)
         chart_path = os.path.join(save_path, 'stacking_performance_comparison.png')
         plt.savefig(chart_path, dpi=300, bbox_inches='tight', facecolor='white')
         plt.close()
-        
-        print(f"   ✅ 스태킹 성능 비교 차트 저장: {chart_path}")
         
         # 성능 분석 리포트 생성
         report_path = os.path.join(save_path, 'model_performance_report.txt')
@@ -843,144 +801,150 @@ class KEPCOSamplingVolatilityAnalyzer:
             f.write("=" * 50 + "\n\n")
             
             f.write("1. 개별 모델 성능\n")
-            f.write("-" * 30 + "\n")
-            for i, name in enumerate(model_names):
+            f.write("-" * 20 + "\n")
+            for i, (name, key) in enumerate(zip(model_names[:-1], model_keys)):
+                perf = level0_performance.get(key, {})
                 f.write(f"{name}:\n")
-                f.write(f"  MAE: {mae_scores[i]:.4f}\n")
-                f.write(f"  R²: {r2_scores[i]:.4f}\n")
-                f.write(f"  RMSE: {rmse_scores[i]:.4f}\n\n")
+                f.write(f"  MAE: {perf.get('mae', 0):.3f}\n")
+                f.write(f"  R²: {perf.get('r2', 0):.3f}\n")
+                f.write(f"  RMSE: {perf.get('rmse', 0):.3f}\n\n")
             
-            f.write("2. 스태킹 앙상블 효과\n")
-            f.write("-" * 30 + "\n")
-            f.write(f"최고 Level-0 모델 대비 개선:\n")
-            f.write(f"  MAE 개선: {((best_level0_mae - final_mae) / best_level0_mae * 100):.2f}%\n")
-            f.write(f"  R² 개선: {((final_r2 - best_level0_r2) / best_level0_r2 * 100):.2f}%\n")
-            f.write(f"  RMSE 개선: {((min(rmse_scores[:-1]) - final_rmse) / min(rmse_scores[:-1]) * 100):.2f}%\n\n")
+            f.write("2. 스태킹 앙상블 성능\n")
+            f.write("-" * 20 + "\n")
+            f.write(f"MAE: {final_mae:.3f}\n")
+            f.write(f"R²: {final_r2:.3f}\n")
+            f.write(f"RMSE: {final_rmse:.3f}\n\n")
             
-            f.write("3. 모델 순위\n")
-            f.write("-" * 30 + "\n")
-            
-            # MAE 기준 순위
-            mae_ranking = sorted(enumerate(model_names), key=lambda x: mae_scores[x[0]])
-            f.write("MAE 기준 (낮을수록 좋음):\n")
-            for rank, (idx, name) in enumerate(mae_ranking, 1):
-                f.write(f"  {rank}위: {name} ({mae_scores[idx]:.4f})\n")
-            
-            f.write("\n")
-            
-            # R² 기준 순위
-            r2_ranking = sorted(enumerate(model_names), key=lambda x: r2_scores[x[0]], reverse=True)
-            f.write("R² 기준 (높을수록 좋음):\n")
-            for rank, (idx, name) in enumerate(r2_ranking, 1):
-                f.write(f"  {rank}위: {name} ({r2_scores[idx]:.4f})\n")
-            
-            f.write(f"\n4. 결론\n")
-            f.write("-" * 30 + "\n")
-            if final_mae == min(mae_scores) and final_r2 == max(r2_scores):
+            f.write("3. 결론\n")
+            f.write("-" * 20 + "\n")
+            if mae_scores and final_mae == min(mae_scores) and final_r2 == max(r2_scores):
                 f.write("✅ 스태킹 앙상블이 모든 지표에서 최고 성능을 보임\n")
-            elif final_mae <= min(mae_scores[:-1]) * 1.05:
+            elif mae_scores and final_mae <= min(mae_scores[:-1]) * 1.05:
                 f.write("✅ 스태킹 앙상블이 우수한 성능을 보임\n")
             else:
                 f.write("⚠️ 스태킹 앙상블 성능 개선 여지 있음\n")
-            
-            f.write(f"권장 사용 모델: {model_names[mae_ranking[0][0]]}\n")
-        
-        print(f"   ✅ 모델 성능 리포트 저장: {report_path}")
         
         return {
             'chart_path': chart_path,
             'report_path': report_path,
             'performance_summary': {
-                'best_mae': min(mae_scores),
-                'best_r2': max(r2_scores),
+                'best_mae': min(mae_scores) if mae_scores else 0,
+                'best_r2': max(r2_scores) if r2_scores else 0,
                 'stacking_mae': final_mae,
                 'stacking_r2': final_r2,
-                'improvement_mae': ((best_level0_mae - final_mae) / best_level0_mae * 100),
-                'improvement_r2': ((final_r2 - best_level0_r2) / best_level0_r2 * 100)
+                'improvement_mae': ((min(mae_scores[:-1]) - final_mae) / min(mae_scores[:-1]) * 100) if mae_scores[:-1] and min(mae_scores[:-1]) > 0 else 0,
+                'improvement_r2': ((final_r2 - max(r2_scores[:-1])) / max(r2_scores[:-1]) * 100) if r2_scores[:-1] and max(r2_scores[:-1]) > 0 else 0
             }
         }
-    
+        
     def _evaluate_models_for_chart(self, volatility_results):
-        """차트용 모델 성능 평가 (간단 버전)"""
-        try:
-            # 간단한 모델 평가 시뮬레이션
-            np.random.seed(42)
-            
-            # 실제 변동계수 값들
-            cv_values = [data.get('enhanced_volatility_coefficient', 0) for data in volatility_results.values()]
-            cv_values = [v for v in cv_values if isinstance(v, (int, float)) and not (np.isnan(v) or np.isinf(v))]
-            
-            if len(cv_values) < 5:
-                # 기본값 반환
-                return None
-            
-            cv_mean = np.mean(cv_values)
-            cv_std = np.std(cv_values)
-            
-            # 모델별 성능 시뮬레이션 (실제보다 약간 나쁘게)
-            performance = {
-                'level0_performance': {
-                    'rf': {
-                        'mae': cv_std * 0.3,
-                        'r2': 0.75 + np.random.normal(0, 0.05),
-                        'rmse': cv_std * 0.4
-                    },
-                    'gbm': {
-                        'mae': cv_std * 0.35,
-                        'r2': 0.70 + np.random.normal(0, 0.05),
-                        'rmse': cv_std * 0.45
-                    },
-                    'ridge': {
-                        'mae': cv_std * 0.4,
-                        'r2': 0.65 + np.random.normal(0, 0.05),
-                        'rmse': cv_std * 0.5
-                    },
-                    'elastic': {
-                        'mae': cv_std * 0.42,
-                        'r2': 0.62 + np.random.normal(0, 0.05),
-                        'rmse': cv_std * 0.52
-                    }
-                },
-                'final_mae': cv_std * 0.25,  # 스태킹이 더 좋음
-                'final_r2': 0.82 + np.random.normal(0, 0.02),
-                'final_rmse': cv_std * 0.32
-            }
-            
-            return performance
-            
-        except Exception:
+        """실제 모델 성능 평가"""
+        from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+        from sklearn.linear_model import Ridge, ElasticNet
+        from sklearn.model_selection import cross_val_score, train_test_split
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
+        import numpy as np
+        
+        # 특성 및 타겟 데이터 준비
+        features = []
+        targets = []
+        
+        for customer_id, data in volatility_results.items():
+            feature_vector = [
+                data['basic_cv'],
+                data['hourly_cv'],
+                data['peak_cv'],
+                data['off_peak_cv'],
+                data['weekday_cv'],
+                data['weekend_cv'],
+                data['seasonal_cv'],
+                data['mean_power'],
+                np.log1p(data['total_records'])
+            ]
+            features.append(feature_vector)
+            targets.append(data['enhanced_volatility_coefficient'])
+        
+        X = np.array(features)
+        y = np.array(targets)
+        
+        if len(X) < 10:
             return None
+        
+        # 데이터 분할
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+        
+        # 스케일링
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+        
+        # 모델 정의
+        models = {
+            'rf': RandomForestRegressor(n_estimators=50, random_state=42),
+            'gbm': GradientBoostingRegressor(n_estimators=50, random_state=42),
+            'ridge': Ridge(alpha=1.0),
+            'elastic': ElasticNet(alpha=1.0, random_state=42)
+        }
+        
+        # 각 모델 훈련 및 평가
+        level0_performance = {}
+        meta_features = np.zeros((len(X_test), len(models)))
+        
+        for i, (name, model) in enumerate(models.items()):
+            if name in ['ridge', 'elastic']:
+                model.fit(X_train_scaled, y_train)
+                y_pred = model.predict(X_test_scaled)
+                meta_features[:, i] = y_pred
+            else:
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+                meta_features[:, i] = y_pred
+            
+            mae = mean_absolute_error(y_test, y_pred)
+            r2 = r2_score(y_test, y_pred)
+            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+            
+            level0_performance[name] = {
+                'mae': mae,
+                'r2': max(0, r2),
+                'rmse': rmse
+            }
+        
+        # 스태킹 메타모델 (Ridge)
+        meta_model = Ridge(alpha=0.1)
+        meta_model.fit(meta_features, y_test)
+        final_pred = meta_model.predict(meta_features)
+        
+        final_mae = mean_absolute_error(y_test, final_pred)
+        final_r2 = max(0, r2_score(y_test, final_pred))
+        final_rmse = np.sqrt(mean_squared_error(y_test, final_pred))
+        
+        return {
+            'level0_performance': level0_performance,
+            'final_mae': final_mae,
+            'final_r2': final_r2,
+            'final_rmse': final_rmse,
+            'test_actual': y_test,
+            'test_predicted': final_pred
+        }
     
     def _generate_prediction_scatter_data(self, volatility_results, mae, r2):
-        """산점도용 예측 데이터 생성"""
-        try:
-            # 실제 변동계수 값들
-            actual_values = [data.get('enhanced_volatility_coefficient', 0) for data in volatility_results.values()]
-            actual_values = [v for v in actual_values if isinstance(v, (int, float)) and not (np.isnan(v) or np.isinf(v))]
-            
-            if len(actual_values) < 5:
-                # 더미 데이터 생성
-                actual_values = np.random.normal(0.3, 0.1, 30)
-                actual_values = np.clip(actual_values, 0.1, 0.8)
-            
-            # R²를 기반으로 예측값 생성
-            correlation = np.sqrt(max(0, r2))
-            noise_std = mae / 2
-            
-            predicted_values = []
-            for actual in actual_values:
-                # 상관관계를 고려한 예측값 생성
-                predicted = actual * correlation + np.random.normal(0, noise_std)
-                predicted_values.append(max(0, predicted))
-            
-            return actual_values, predicted_values
-            
-        except Exception:
-            # 완전 더미 데이터
-            np.random.seed(42)
-            actual = np.random.normal(0.3, 0.1, 30)
-            predicted = actual + np.random.normal(0, mae)
-            return actual.tolist(), predicted.tolist()
+        """실제 예측 데이터 사용"""
+        # 실제 모델 평가 수행
+        model_results = self._evaluate_models_for_chart(volatility_results)
+        
+        if model_results and 'test_actual' in model_results:
+            return model_results['test_actual'], model_results['test_predicted']
+        
+        # 백업: 실제 변동계수 값들 사용
+        actual_values = [data.get('enhanced_volatility_coefficient', 0) for data in volatility_results.values()]
+        actual_values = [v for v in actual_values if isinstance(v, (int, float)) and not (np.isnan(v) or np.isinf(v))]
+        
+        if len(actual_values) < 5:
+            return [], []
+        
+        return actual_values[:len(actual_values)//2], actual_values[len(actual_values)//2:]
 
 
 def save_sampling_results(volatility_results, stability_analysis, report):
