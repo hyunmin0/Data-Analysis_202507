@@ -715,16 +715,14 @@ class KEPCOSamplingVolatilityAnalyzer:
         return report
 
     def create_volatility_components_radar_chart(self, volatility_results, save_path='./analysis_results'):
-        """변동계수 구성요소 레이더 차트 생성"""
+        """레이더 차트 생성"""
         import matplotlib.pyplot as plt
         import numpy as np
         from math import pi
         import os
         
-        print("\n  변동계수 구성요소 레이더 차트 생성 중...")
-        
         if not volatility_results:
-            print("    변동계수 결과가 없습니다.")
+            print("변동계수 결과가 없습니다.")
             return None
         
         # 구성요소 이름 및 순서 정의
@@ -769,7 +767,7 @@ class KEPCOSamplingVolatilityAnalyzer:
         
         # 각도 계산 (5개 항목)
         angles = [n / float(len(components)) * 2 * pi for n in range(len(components))]
-        angles += angles[:1]  # 원을 닫기 위해
+        angles += angles[:1] 
         
         # 색상 팔레트
         colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FECA57']
@@ -788,7 +786,7 @@ class KEPCOSamplingVolatilityAnalyzer:
                 normalized_value = raw_value / max_values[j] if max_values[j] > 0 else 0
                 values.append(min(normalized_value, 1.0))  # 1.0으로 클리핑
             
-            values += values[:1]  # 원을 닫기 위해
+            values += values[:1] 
             
             # 선 그리기
             ax.plot(angles, values, 'o-', linewidth=2, label=f'{customer_id}', color=colors[i], markersize=6)
@@ -811,8 +809,7 @@ class KEPCOSamplingVolatilityAnalyzer:
         plt.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0), fontsize=10)
         
         # 서브 제목 (정규화 설명)
-        fig.text(0.5, 0.02, '※ 각 구성요소는 최대값으로 정규화됨 (0-1 범위)', 
-                 ha='center', fontsize=9, style='italic')
+        fig.text(0.5, 0.02, '정규화 범위: 0-1', ha='center', fontsize=9)
         
         # 통계 정보 추가
         stats_text = f"분석 고객 수: {len(volatility_results)}명\n"
@@ -828,10 +825,49 @@ class KEPCOSamplingVolatilityAnalyzer:
         plt.savefig(chart_path, dpi=300, bbox_inches='tight', facecolor='white')
         plt.close()
         
-        print(f"    레이더 차트 저장: {chart_path}")
+        # 구성요소별 통계 정보 생성
+        component_stats = {}
+        for i, key in enumerate(component_keys):
+            values = [v.get(key, 0) for v in volatility_results.values() if not (np.isnan(v.get(key, 0)) or np.isinf(v.get(key, 0)))]
+            if values:
+                component_stats[components[i]] = {
+                    'mean': np.mean(values),
+                    'std': np.std(values),
+                    'min': np.min(values),
+                    'max': np.max(values),
+                    'median': np.median(values)
+                }
+        
+        # 텍스트 리포트도 생성
+        report_path = os.path.join(save_path, 'volatility_components_analysis.txt')
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write("변동계수 구성요소 분석 리포트\n")
+            f.write("=" * 50 + "\n\n")
+            
+            f.write("1. 구성요소별 통계\n")
+            f.write("-" * 30 + "\n")
+            for comp_name, stats in component_stats.items():
+                f.write(f"{comp_name}:\n")
+                f.write(f"  평균: {stats['mean']:.4f}\n")
+                f.write(f"  표준편차: {stats['std']:.4f}\n")
+                f.write(f"  최소값: {stats['min']:.4f}\n")
+                f.write(f"  최대값: {stats['max']:.4f}\n")
+                f.write(f"  중앙값: {stats['median']:.4f}\n\n")
+            
+            f.write("2. 상위 고객 분석\n")
+            f.write("-" * 30 + "\n")
+            for customer_id, data in top_customers:
+                f.write(f"{customer_id}: {data.get('enhanced_volatility_coefficient', 0):.4f}\n")
+                for i, key in enumerate(component_keys):
+                    f.write(f"  {components[i]}: {data.get(key, 0):.4f}\n")
+                f.write("\n")
+        
+        print(f"차트 저장: {chart_path}")
         
         return {
             'chart_path': chart_path,
+            'report_path': report_path,
+            'component_stats': component_stats,
             'top_customers': [customer_id for customer_id, _ in top_customers]
         }
 
