@@ -31,6 +31,7 @@ class KEPCOAlphaOptimizedAnalyzer:
     def __init__(self, results_dir='./analysis_results', chunk_size=5000):
         self.results_dir = results_dir
         self.chunk_size = chunk_size
+        self.encoding = 'utf-8'  # 기본 인코딩 설정
         self.scaler = StandardScaler()
         self.robust_scaler = RobustScaler()
         self.level0_models = {}
@@ -77,47 +78,60 @@ class KEPCOAlphaOptimizedAnalyzer:
             return {}
     
     def find_sampled_data(self):
-        """전처리 2단계에서 생성된 샘플링 데이터 찾기"""
-        print("\n📂 전처리 2단계 샘플링 데이터 검색 중...")
-        
-        # 가능한 파일 경로들
-        possible_paths = [
-            os.path.join(self.results_dir, 'sampled_lp_data.csv'),
-            os.path.join(self.results_dir, 'processed_lp_data.csv'),
-            './sampled_lp_data.csv',
-            './processed_lp_data.csv'
-        ]
-        
-        for path in possible_paths:
-            if os.path.exists(path):
-                # 파일 크기 확인
-                file_size = os.path.getsize(path) / (1024 * 1024)  # MB
-                print(f"   ✅ 샘플링 데이터 발견: {path}")
-                print(f"   📊 파일 크기: {file_size:.1f} MB")
-                
-                # 간단한 데이터 검증
-                try:
-                    sample_df = pd.read_csv(path, nrows=1000)
-                    print(f"   📋 컬럼: {list(sample_df.columns)}")
-                    
-                    # 전체 파일에서 고객 수 추정
-                    total_rows = sum(1 for line in open(path)) - 1  # 헤더 제외
-                    sample_customers = sample_df['대체고객번호'].nunique()
-                    avg_records_per_customer = len(sample_df) / sample_customers if sample_customers > 0 else 1
-                    estimated_customers = int(total_rows / avg_records_per_customer)
-                    
-                    print(f"   👥 첫 1,000행 고객 수: {sample_customers}명")
-                    print(f"   📊 전체 추정 고객 수: 약 {estimated_customers}명")
-                    
-                    self.sampled_data_path = path
-                    return True
-                except Exception as e:
-                    print(f"   ⚠️ 파일 검증 실패: {e}")
-                    continue
-        
-        print("   ❌ 샘플링 데이터를 찾을 수 없습니다.")
-        print("   💡 전처리 2단계를 먼저 실행해주세요.")
-        return False
+       """전처리 2단계에서 생성된 샘플링 데이터 찾기"""
+       print("\n📂 전처리 2단계 샘플링 데이터 검색 중...")
+       
+       # 가능한 파일 경로들
+       possible_paths = [
+           os.path.join(self.results_dir, 'sampled_lp_data.csv'),
+           os.path.join(self.results_dir, 'processed_lp_data.csv'),
+           './sampled_lp_data.csv',
+           './processed_lp_data.csv'
+       ]
+       
+       # 다양한 인코딩 시도
+       encodings_to_try = ['utf-8', 'utf-8-sig', 'euc-kr', 'cp949', 'latin1', 'iso-8859-1']
+       
+       for path in possible_paths:
+           if os.path.exists(path):
+               # 파일 크기 확인
+               file_size = os.path.getsize(path) / (1024 * 1024)  # MB
+               print(f"   ✅ 샘플링 데이터 발견: {path}")
+               print(f"   📊 파일 크기: {file_size:.1f} MB")
+               
+               # 다양한 인코딩으로 파일 읽기 시도
+               for encoding in encodings_to_try:
+                   try:
+                       print(f"   🔍 인코딩 시도: {encoding}")
+                       sample_df = pd.read_csv(path, nrows=1000, encoding=encoding)
+                       print(f"   ✅ 인코딩 성공: {encoding}")
+                       print(f"   📋 컬럼: {list(sample_df.columns)}")
+                       
+                       # 필수 컬럼 확인
+                       required_columns = ['대체고객번호', '순방향 유효전력']
+                       if all(col in sample_df.columns for col in required_columns):
+                           # 전체 파일에서 고객 수 추정
+                           total_rows = sum(1 for line in open(path, encoding=encoding)) - 1  # 헤더 제외
+                           sample_customers = sample_df['대체고객번호'].nunique()
+                           avg_records_per_customer = len(sample_df) / sample_customers if sample_customers > 0 else 1
+                           estimated_customers = int(total_rows / avg_records_per_customer)
+                           
+                           print(f"   👥 첫 1,000행 고객 수: {sample_customers}명")
+                           print(f"   📊 전체 추정 고객 수: 약 {estimated_customers}명")
+                           
+                           self.sampled_data_path = path
+                           self.encoding = encoding  # 성공한 인코딩 저장
+                           return True
+                       else:
+                           print(f"   ⚠️ 필수 컬럼 누락: {required_columns}")
+                           
+                   except Exception as e:
+                       print(f"   ❌ {encoding} 인코딩 실패: {str(e)[:100]}...")
+                       continue
+       
+       print("   ❌ 샘플링 데이터를 찾을 수 없습니다.")
+       print("   💡 전처리 2단계를 먼저 실행해주세요.")
+       return False
     
     def load_data_in_chunks(self):
         """청크 단위로 데이터 로딩 및 전처리"""
@@ -128,7 +142,7 @@ class KEPCOAlphaOptimizedAnalyzer:
             return False
         
         # 전체 행 수 확인
-        total_rows = sum(1 for line in open(self.sampled_data_path)) - 1  # 헤더 제외
+        total_rows = sum(1 for line in open(self.sampled_data_path, encoding=self.encoding)) - 1  # 헤더 제외
         total_chunks = (total_rows + self.chunk_size - 1) // self.chunk_size
         
         print(f"   📊 전체 데이터: {total_rows:,}건")
@@ -141,7 +155,7 @@ class KEPCOAlphaOptimizedAnalyzer:
         # 첫 번째 패스: 고객별 기본 정보 수집
         print("   🔍 1단계: 고객별 기본 정보 수집 중...")
         
-        chunk_reader = pd.read_csv(self.sampled_data_path, chunksize=self.chunk_size)
+        chunk_reader = pd.read_csv(self.sampled_data_path, chunksize=self.chunk_size, encoding=self.encoding)
         
         for chunk_idx, chunk in enumerate(chunk_reader):
             try:
@@ -382,7 +396,7 @@ class KEPCOAlphaOptimizedAnalyzer:
         } for cid in batch_customers}
         
         # 청크 단위로 파일 읽기
-        chunk_reader = pd.read_csv(self.sampled_data_path, chunksize=self.chunk_size)
+        chunk_reader = pd.read_csv(self.sampled_data_path, chunksize=self.chunk_size, encoding=self.encoding)
         
         for chunk in chunk_reader:
             try:
