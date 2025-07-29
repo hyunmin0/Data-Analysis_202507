@@ -21,12 +21,12 @@ class KEPCOAnalyzerOptimized:
         
         # 알고리즘_v4.py와 동일한 샘플링 설정
         self.sampling_config = {
-            'customer_sample_ratio': 0.3,      # 고객의 30%만 샘플링
-            'file_sample_ratio': 0.2,          # 파일의 20%만 샘플링 (시간 대표성)
+            'customer_sample_ratio': 0.4,      # 고객의 30%만 샘플링
+            'file_sample_ratio': 0.3,          # 파일의 20%만 샘플링 (시간 대표성)
             'min_customers': 20,               # 최소 고객 수
             'min_records_per_customer': 50,    # 고객당 최소 레코드 수
-            'max_customers': 1000,             # 최대 고객 수 (성능 제한)
-            'max_records_per_customer': 500,   # 고객당 최대 레코드 수 (성능 제한)
+            'max_customers': 2000,             # 최대 고객 수 (성능 제한)
+            'max_records_per_customer': 1000,   # 고객당 최대 레코드 수 (성능 제한)
             'stratified_sampling': True        # 계층 샘플링 사용
         }
         
@@ -707,7 +707,13 @@ class KEPCOAnalyzerOptimized:
         
         if len(self.df) == 0:
             print("❌ 샘플링된 데이터가 없습니다.")
+            print("\n🔧 확인 사항:")
+            print("   1. CSV 파일 경로: './제13회 산업부 공모전 대상고객 LP데이터/processed_LPData_*.csv'")
+            print("   2. 전처리1단계를 먼저 실행했는지 확인")
             return None
+        
+        # 🆕 추가: 알고리즘_v4.py를 위한 샘플링 데이터 저장
+        sampled_file_path = self.save_sampled_data_for_algorithm()
         
         # 분석 실행
         print("\n📈 패턴 분석 실행...")
@@ -726,8 +732,35 @@ class KEPCOAnalyzerOptimized:
             del self.df
         gc.collect()
         
-        return output_path
+        # 🆕 변경: sampled_file_path 반환 (기존에는 output_path만 반환)
+        return sampled_file_path if sampled_file_path else output_path
     
+    def save_sampled_data_for_algorithm(self):
+        """알고리즘_v4.py를 위한 샘플링 데이터 저장"""
+        print("\n알고리즘_v4.py를 위한 샘플링 데이터 저장 중...")
+        
+        if self.df is None or len(self.df) == 0:
+            print("   저장할 데이터가 없습니다.")
+            return None
+        
+        # results 디렉토리 생성
+        results_dir = './analysis_results'
+        os.makedirs(results_dir, exist_ok=True)
+        
+        # 단일 파일로 저장
+        save_path = os.path.join(results_dir, 'sampled_lp_data.csv')
+        
+        try:
+            # CSV 저장
+            self.df.to_csv(save_path, index=False, encoding='utf-8')
+            print(f"   샘플링 데이터 저장: {save_path}")
+            print(f"   📊 저장된 데이터: {len(self.df):,}건, {self.df['대체고객번호'].nunique()}명")
+            print(f"   🔄 이제 알고리즘_v4_수정.py를 실행할 수 있습니다!")
+            return save_path
+        except Exception as e:
+            print(f"   파일 저장 실패: {e}")
+            return None
+        
     def _print_summary(self):
         """결과 요약 출력"""
         print("\n" + "="*70)
@@ -807,10 +840,15 @@ def main():
     print("   ✅ 전처리1단계와 호환")
     print("   ✅ 메모리 안전 처리")
     print("   ✅ 알고리즘_v4.py 완전 호환")
+    print("   ✅ 샘플링 데이터 파일 자동 생성")  # 🆕 추가
     print()
     print("📁 예상 파일 경로:")
     print("   - Excel: './제13회 산업부 공모전 대상고객/제13회 산업부 공모전 대상고객.xlsx'")
     print("   - CSV: './제13회 산업부 공모전 대상고객 LP데이터/processed_LPData_*.csv'")
+    print()
+    print("💾 생성될 파일:")  # 🆕 추가
+    print("   - ./analysis_results/sampled_lp_data.csv")
+    print("   - ./analysis_results/analysis_results2.json")
     print()
     
     analyzer = KEPCOAnalyzerOptimized()
@@ -828,8 +866,10 @@ def main():
             print("   - 알고리즘_v4.py와 동일한 샘플링 방식")
             print("   - 데이터안심구역 환경에 완전 호환")
             print("   - 순차 처리로 안정성 확보")
+            print("   - 알고리즘_v4.py 연동을 위한 데이터 파일 생성")  # 🆕 추가
             print("\n🔄 다음 단계:")
-            print("   이제 알고리즘_v4.py를 실행하여 정확한 변동계수를 계산하세요!")
+            print("   python 알고리즘_v4_수정.py")  # 🆕 수정
+            print("   위 명령어로 변동계수 분석을 시작하세요!")  # 🆕 추가
         else:
             print("\n❌ 분석 실패")
             print("\n🔧 확인 사항:")
